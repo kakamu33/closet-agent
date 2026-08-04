@@ -62,6 +62,40 @@ final wardrobeCanvasShowNamesProvider =
       WardrobeCanvasShowNamesController.new,
     );
 
+/// 供需要"仅在已登录且使用 CloudBase 认证时才同步云端"的
+/// [AsyncNotifier] 复用：统一获取当前登录用户与其云端 access token。
+///
+/// 未登录、或当前认证实现并非 [CloudBaseAuthRepository]（例如后续切换为
+/// 其他认证方式）时返回 null，调用方据此判断本次操作是否需要触达云端。
+mixin CloudSessionMixin<T> on AsyncNotifier<T> {
+  Future<CloudSession?> cloudSession() async {
+    final user = await ref.read(authSessionProvider.future);
+    final repository = ref.read(authRepositoryProvider);
+    if (user == null || repository is! CloudBaseAuthRepository) return null;
+    final accessToken = await repository.currentAccessToken();
+    return accessToken == null ? null : CloudSession(user, accessToken);
+  }
+
+  /// 仅在已登录（存在有效 [CloudSession]）时执行 [action]，未登录时静默跳过。
+  ///
+  /// 用于"本地数据始终为主、云端为登录用户的附加同步"这一类写操作：
+  /// 调用方负责本地读写的时机与顺序，这里只负责收敛"要不要触达云端"的
+  /// 判断逻辑，避免每个 save/remove 方法里都重复一遍取 session 的样板代码。
+  Future<void> syncToCloudIfSignedIn(
+    Future<void> Function(CloudSession session) action,
+  ) async {
+    final session = await cloudSession();
+    if (session != null) await action(session);
+  }
+}
+
+class CloudSession {
+  const CloudSession(this.user, this.accessToken);
+
+  final AuthUser user;
+  final String accessToken;
+}
+
 class AuthSessionController extends AsyncNotifier<AuthUser?> {
   AuthRepository get _repository => ref.read(authRepositoryProvider);
 
@@ -157,7 +191,8 @@ class UserProfileController extends AsyncNotifier<UserProfile> {
   }
 }
 
-class WardrobeController extends AsyncNotifier<List<WardrobeItem>> {
+class WardrobeController extends AsyncNotifier<List<WardrobeItem>>
+    with CloudSessionMixin {
   AppDatabase get _db => ref.read(databaseProvider);
   CloudBaseWardrobeRepository get _cloud =>
       ref.read(cloudBaseWardrobeRepositoryProvider);
@@ -165,7 +200,7 @@ class WardrobeController extends AsyncNotifier<List<WardrobeItem>> {
   @override
   Future<List<WardrobeItem>> build() async {
     final localItems = await _db.items();
-    final session = await _cloudSession();
+    final session = await cloudSession();
     if (session == null) return localItems;
     try {
       final cloudItems = await _cloud.fetchItems(
@@ -181,34 +216,25 @@ class WardrobeController extends AsyncNotifier<List<WardrobeItem>> {
 
   Future<void> save(WardrobeItem item) async {
     await _db.saveItem(item);
-    final session = await _cloudSession();
-    if (session != null) {
-      await _cloud.saveItem(
+    await syncToCloudIfSignedIn(
+      (session) => _cloud.saveItem(
         user: session.user,
         accessToken: session.accessToken,
         item: item,
-      );
-    }
+      ),
+    );
     ref.invalidateSelf();
   }
 
   Future<void> remove(String id) async {
-    final session = await _cloudSession();
-    if (session != null) {
-      await _cloud.deleteItem(accessToken: session.accessToken, itemId: id);
-    }
+    await syncToCloudIfSignedIn(
+      (session) =>
+          _cloud.deleteItem(accessToken: session.accessToken, itemId: id),
+    );
     await _db.deleteItem(id);
     ref.invalidateSelf();
     ref.invalidate(outfitsProvider);
     ref.invalidate(wardrobeCanvasLayoutsProvider);
-  }
-
-  Future<_CloudSession?> _cloudSession() async {
-    final user = await ref.read(authSessionProvider.future);
-    final repository = ref.read(authRepositoryProvider);
-    if (user == null || repository is! CloudBaseAuthRepository) return null;
-    final accessToken = await repository.currentAccessToken();
-    return accessToken == null ? null : _CloudSession(user, accessToken);
   }
 }
 
@@ -270,7 +296,8 @@ class WardrobeCanvasLayoutsController
   }
 }
 
-class WardrobeTagsController extends AsyncNotifier<List<WardrobeTag>> {
+class WardrobeTagsController extends AsyncNotifier<List<WardrobeTag>>
+    with CloudSessionMixin {
   AppDatabase get _db => ref.read(databaseProvider);
   CloudBaseWardrobeRepository get _cloud =>
       ref.read(cloudBaseWardrobeRepositoryProvider);
@@ -278,7 +305,7 @@ class WardrobeTagsController extends AsyncNotifier<List<WardrobeTag>> {
   @override
   Future<List<WardrobeTag>> build() async {
     final localTags = await _db.tags();
-    final session = await _cloudSession();
+    final session = await cloudSession();
     if (session == null) return localTags;
     try {
       var cloudTags = await _cloud.fetchTags(
@@ -299,7 +326,7 @@ class WardrobeTagsController extends AsyncNotifier<List<WardrobeTag>> {
   }
 
   /// 向云端写入默认标签（确定性 ID，避免重复），并返回写入后的标签列表。
-  Future<List<WardrobeTag>> _seedDefaultTags(_CloudSession session) async {
+  Future<List<WardrobeTag>> _seedDefaultTags(CloudSession session) async {
     for (final tag in defaultWardrobeTags) {
       try {
         await _cloud.saveTag(
@@ -326,22 +353,20 @@ class WardrobeTagsController extends AsyncNotifier<List<WardrobeTag>> {
     final currentTags = await future;
     validateTagName(tag, currentTags);
     await _db.saveTag(tag);
-    final session = await _cloudSession();
-    if (session != null) {
-      await _cloud.saveTag(
+    await syncToCloudIfSignedIn(
+      (session) => _cloud.saveTag(
         user: session.user,
         accessToken: session.accessToken,
         tag: tag,
         existingTags: currentTags,
-      );
-    }
+      ),
+    );
     ref.invalidateSelf();
   }
 
   Future<void> reorder(List<WardrobeTag> tags) async {
     await _db.reorderTags(tags);
-    final session = await _cloudSession();
-    if (session != null) {
+    await syncToCloudIfSignedIn((session) async {
       for (final tag in tags) {
         await _cloud.saveTag(
           user: session.user,
@@ -350,34 +375,19 @@ class WardrobeTagsController extends AsyncNotifier<List<WardrobeTag>> {
           existingTags: tags,
         );
       }
-    }
+    });
     ref.invalidateSelf();
   }
 
   Future<void> remove(String id) async {
-    final session = await _cloudSession();
-    if (session != null) {
-      await _cloud.deleteTag(accessToken: session.accessToken, tagId: id);
-    }
+    await syncToCloudIfSignedIn(
+      (session) =>
+          _cloud.deleteTag(accessToken: session.accessToken, tagId: id),
+    );
     await _db.deleteTag(id);
     ref.invalidateSelf();
     ref.invalidate(wardrobeItemsProvider);
   }
-
-  Future<_CloudSession?> _cloudSession() async {
-    final user = await ref.read(authSessionProvider.future);
-    final repository = ref.read(authRepositoryProvider);
-    if (user == null || repository is! CloudBaseAuthRepository) return null;
-    final accessToken = await repository.currentAccessToken();
-    return accessToken == null ? null : _CloudSession(user, accessToken);
-  }
-}
-
-class _CloudSession {
-  const _CloudSession(this.user, this.accessToken);
-
-  final AuthUser user;
-  final String accessToken;
 }
 
 final outfitTagsProvider =

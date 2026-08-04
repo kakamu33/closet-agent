@@ -259,8 +259,13 @@ class _LogoutCard extends ConsumerWidget {
             ],
           ),
         );
-        if (confirmed == true) {
-          await ref.read(authSessionProvider.notifier).logout();
+        if (confirmed != true) return;
+        await ref.read(authSessionProvider.notifier).logout();
+        // 退出登录后 [DiexuApp] 会把根页面切回登录页，但当前设置详情页是
+        // 通过 Navigator.push 叠加在根页面之上的，不会被自动移除；这里
+        // 主动清空导航栈，回到（已切换为登录页的）根路由。
+        if (context.mounted) {
+          Navigator.of(context).popUntil((route) => route.isFirst);
         }
       },
     ),
@@ -364,6 +369,12 @@ class _DeleteAccountCard extends ConsumerWidget {
 
     try {
       await ref.read(authSessionProvider.notifier).deleteAccount();
+      // 注销成功后 [DiexuApp] 会把根页面切回登录页，但当前设置详情页是
+      // 通过 Navigator.push 叠加在根页面之上的，不会被自动移除；这里
+      // 主动清空导航栈，回到（已切换为登录页的）根路由。
+      if (context.mounted) {
+        Navigator.of(context).popUntil((route) => route.isFirst);
+      }
     } catch (error) {
       if (context.mounted) {
         ScaffoldMessenger.of(context)
