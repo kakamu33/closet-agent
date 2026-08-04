@@ -1,0 +1,35 @@
+
+# FVM Version Cache
+.fvm/
+
+# Local CloudBase credentials. Never commit real API keys or tokens.
+.env
+.env.*
+!.env.example
+
+# Cloud function dependencies (installed at deploy time by the CloudBase platform)
+# and the deployment archives built from them; source code is tracked, packages aren't.
+cloudfunctions/**/node_modules/
+cloudfunctions/*.zip
+
+# Flutter/Dart build artifacts and tooling caches.
+build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# macOS
+.DS_Store
+
+# Platform-specific build outputs that should be regenerated, not committed.
+android/app/debug
+android/app/profile
+android/app/release

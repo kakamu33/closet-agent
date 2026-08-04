@@ -1,0 +1,10 @@
+{
+  "name": "deleteAccount",
+  "version": "1.0.0",
+  "description": "彻底删除当前登录用户的 CloudBase Auth 账号及其全部业务数据",
+  "main": "index.js",
+  "dependencies": {
+    "tencentcloud-sdk-nodejs-tcb": "^4.1.281"
+  }
+}
+
