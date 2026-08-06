@@ -87,7 +87,7 @@ class _OutfitDetailScreenState extends ConsumerState<OutfitDetailScreen> {
           )),
           const SizedBox(height: 18),
           Text(
-            '创建于 ${timestamp.format(_outfit.createdAt)}\n更新于 ${timestamp.format(_outfit.updatedAt)}',
+            '创建于 ${timestamp.format(_outfit.createdAt.toLocal())}\n更新于 ${timestamp.format(_outfit.updatedAt.toLocal())}',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
           ),
         ],

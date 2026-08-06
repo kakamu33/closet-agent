@@ -7,12 +7,12 @@ import 'package:uuid/uuid.dart';
 import '../../../core/providers.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/item_image.dart';
+import '../../search/presentation/search_results_screen.dart';
+import '../../shell/app_shell.dart';
 import '../../wardrobe/domain/wardrobe_tag.dart';
 import '../domain/outfit.dart';
 import 'outfit_detail_screen.dart';
 import 'outfit_form_screen.dart';
-import '../../search/presentation/search_results_screen.dart';
-import '../../shell/app_shell.dart';
 
 class OutfitsScreen extends ConsumerStatefulWidget {
   const OutfitsScreen({super.key});
@@ -45,6 +45,18 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
 
   void _exitTagEditing() {
     if (_editingTags) setState(() => _editingTags = false);
+  }
+
+  /// 进入标签编辑模式。
+  ///
+  /// 已经处于编辑状态时直接返回，不再调用 [setState]：这个方法会被
+  /// [ReorderableListView] 的 `onReorderStart` 回调同步触发——即已经在
+  /// 编辑态下，用户对某个标签“继续长按”会再次启动一次拖拽，若此时仍无
+  /// 条件调用 setState，会在 ReorderableListView 内部正在处理拖拽启动的
+  /// 构建过程中，强制要求祖先 Widget 重新构建，触发
+  /// “setState() or markNeedsBuild() called during build” 异常并导致页面红屏。
+  void _enterTagEditing() {
+    if (!_editingTags) setState(() => _editingTags = true);
   }
 
   @override
@@ -109,8 +121,8 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
                 onEdit: (tag) => _editTag(tag: tag),
                 onDelete: _deleteTag,
                 editing: _editingTags,
-                onStartEditing: () => setState(() => _editingTags = true),
-                onStartEditingTag: (_) => setState(() => _editingTags = true),
+                onStartEditing: _enterTagEditing,
+                onStartEditingTag: (_) => _enterTagEditing(),
                 onReorder: (oldIndex, newIndex) =>
                     _reorderTags(primary, oldIndex, newIndex),
               ),
@@ -133,10 +145,8 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
                           onEdit: (tag) => _editTag(tag: tag),
                           onDelete: _deleteTag,
                           editing: _editingTags,
-                          onStartEditing: () =>
-                              setState(() => _editingTags = true),
-                          onStartEditingTag: (_) =>
-                              setState(() => _editingTags = true),
+                          onStartEditing: _enterTagEditing,
+                          onStartEditingTag: (_) => _enterTagEditing(),
                           onReorder: (oldIndex, newIndex) =>
                               _reorderTags(details, oldIndex, newIndex),
                         ),
@@ -233,6 +243,13 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
     );
   }
 
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
   Future<void> _reorderTags(
     List<WardrobeTag> tags,
     int oldIndex,
@@ -242,7 +259,11 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
     if (newIndex > oldIndex) newIndex--;
     final tag = reordered.removeAt(oldIndex);
     reordered.insert(newIndex, tag);
-    await ref.read(outfitTagsProvider.notifier).reorder(reordered);
+    try {
+      await ref.read(outfitTagsProvider.notifier).reorder(reordered);
+    } catch (error) {
+      _showMessage('标签排序保存失败：$error');
+    }
   }
 
   Future<void> _editTag({WardrobeTag? tag, String? parentId}) async {
@@ -275,16 +296,25 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
       if (tag != null) await _deleteTag(tag);
       return;
     }
-    await ref
-        .read(outfitTagsProvider.notifier)
-        .save(
-          WardrobeTag(
-            id: tag?.id ?? const Uuid().v4(),
-            name: name,
-            parentId: tag?.parentId ?? parentId,
-            sortOrder: tag?.sortOrder ?? DateTime.now().microsecondsSinceEpoch,
-          ),
-        );
+    try {
+      final existingTags = await ref.read(outfitTagsProvider.future);
+      await ref
+          .read(outfitTagsProvider.notifier)
+          .save(
+            WardrobeTag(
+              id: tag?.id ?? const Uuid().v4(),
+              name: name,
+              parentId: tag?.parentId ?? parentId,
+              sortOrder:
+                  tag?.sortOrder ??
+                  nextTagSortOrder(existingTags, parentId: parentId),
+            ),
+          );
+    } on TagValidationException catch (error) {
+      _showMessage(error.message);
+    } catch (error) {
+      _showMessage('标签保存失败：$error');
+    }
   }
 
   Future<void> _deleteTag(WardrobeTag tag) async {
@@ -314,7 +344,11 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
           _detailId = null;
         });
       if (_detailId == tag.id) setState(() => _detailId = null);
-      await ref.read(outfitTagsProvider.notifier).remove(tag.id);
+      try {
+        await ref.read(outfitTagsProvider.notifier).remove(tag.id);
+      } catch (error) {
+        _showMessage('标签删除失败：$error');
+      }
     }
   }
 }

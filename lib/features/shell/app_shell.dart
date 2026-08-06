@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../newUI/wardrobe_collection_screen.dart';
 import '../outfits/presentation/outfits_screen.dart';
 import '../settings/presentation/settings_screen.dart';
-import '../wardrobe/presentation/wardrobe_screen.dart';
 
 final shellTabIndex = ValueNotifier<int>(0);
 
@@ -15,7 +15,11 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   var _index = 0;
-  final _pages = const [WardrobeScreen(), OutfitsScreen(), SettingsScreen()];
+  final _pages = const [
+    WardrobeCollectionScreen(),
+    OutfitsScreen(),
+    SettingsScreen(),
+  ];
 
   @override
   Widget build(BuildContext context) => Scaffold(

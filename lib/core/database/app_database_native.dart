@@ -9,6 +9,7 @@ import '../../features/wardrobe/domain/wardrobe_canvas_layout.dart';
 import '../../features/wardrobe/domain/wardrobe_canvas_region.dart';
 import '../../features/wardrobe/domain/wardrobe_item.dart';
 import '../../features/wardrobe/domain/wardrobe_tag.dart';
+import '../time_utils.dart';
 import 'database_factory.dart';
 
 class AppDatabase {
@@ -19,7 +20,7 @@ class AppDatabase {
 
   Future<Database> _open() => openAppDatabase(
     'diexu.db',
-    version: 16,
+    version: 17,
     onConfigure: (db) async => db.execute('PRAGMA foreign_keys = ON'),
     onCreate: (db, version) async {
       await _createCoreTables(db);
@@ -103,8 +104,81 @@ class AppDatabase {
       if (oldVersion < 16) {
         await _dropCategoryColumn(db);
       }
+      if (oldVersion < 17) {
+        await _purgeLegacyTagIds(db);
+        await _migrateTimestampColumns(db);
+      }
     },
   );
+
+  /// 把 `wardrobe_items`/`outfits` 的 `created_at`/`updated_at` 列从
+  /// ISO8601 字符串迁移为毫秒级时间戳（`INTEGER`，UTC）。
+  ///
+  /// 统一使用时间戳而不是 `timestamptz`/ISO8601 字符串存储时间字段：一来
+  /// 避免不同数据库驱动、不同展示工具对时区的呈现差异造成"时间看起来
+  /// 不对"的困惑；二来数值比较、排序效率更高。SQLite 是弱类型数据库，
+  /// 列本身不需要 `ALTER COLUMN TYPE`，只需要把已有的字符串值转换成数字
+  /// 即可就地生效。
+  Future<void> _migrateTimestampColumns(Database db) async {
+    for (final spec in const [
+      ('wardrobe_items', 'id'),
+      ('outfits', 'id'),
+    ]) {
+      final (table, idColumn) = spec;
+      final rows = await db.query(
+        table,
+        columns: [idColumn, 'created_at', 'updated_at'],
+      );
+      for (final row in rows) {
+        final createdAt = row['created_at'];
+        final updatedAt = row['updated_at'];
+        final values = <String, Object?>{};
+        if (createdAt is String) {
+          values['created_at'] =
+              DateTime.tryParse(createdAt)?.toUtc().millisecondsSinceEpoch ??
+              DateTime.now().toUtc().millisecondsSinceEpoch;
+        }
+        if (updatedAt is String) {
+          values['updated_at'] =
+              DateTime.tryParse(updatedAt)?.toUtc().millisecondsSinceEpoch ??
+              values['created_at'] ??
+              DateTime.now().toUtc().millisecondsSinceEpoch;
+        }
+        if (values.isEmpty) continue;
+        await db.update(
+          table,
+          values,
+          where: '$idColumn = ?',
+          whereArgs: [row[idColumn]],
+        );
+      }
+    }
+  }
+
+  /// 清理旧版本代码遗留的非法标签 id。
+  ///
+  /// 历史上默认标签曾用过 `tops`、`outfit_daily` 这类字符串作为 id，而云端
+  /// `wardrobe_tags`/`outfit_tags` 表的 `id` 字段是 `uuid` 类型。这些脏数据
+  /// 留在本机不会立刻报错，但一旦被当成 `existingTags` 之一参与云端同步，
+  /// 会导致 `invalid input syntax for type uuid` 而使整批同步失败。
+  /// 清理后如果两张标签表变空，会在下次 [tags]/[outfitTags] 调用时被
+  /// [_seedTags]/[_seedOutfitTags] 重新用最新的默认标签填充。
+  Future<void> _purgeLegacyTagIds(Database db) async {
+    for (final table in const ['wardrobe_tags', 'outfit_tags']) {
+      final rows = await db.query(table, columns: const ['id']);
+      final invalidIds = rows
+          .map((row) => row['id']! as String)
+          .where((id) => !isValidTagId(id))
+          .toList();
+      if (invalidIds.isEmpty) continue;
+      final placeholders = List.filled(invalidIds.length, '?').join(',');
+      await db.delete(
+        table,
+        where: 'id IN ($placeholders) OR parent_id IN ($placeholders)',
+        whereArgs: [...invalidIds, ...invalidIds],
+      );
+    }
+  }
 
   /// 移除标签体系重构前遗留的 `wardrobe_items.category` 列。
   ///
@@ -130,12 +204,12 @@ class AppDatabase {
       id TEXT PRIMARY KEY, name TEXT NOT NULL,
       image_path TEXT, image_paths_json TEXT, tag_ids_json TEXT,
       brand TEXT, color TEXT, notes TEXT, currency TEXT NOT NULL DEFAULT 'CNY',
-      price REAL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      price REAL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     )''');
     await db.execute('''CREATE TABLE outfits(
       id TEXT PRIMARY KEY, name TEXT NOT NULL, occasion TEXT NOT NULL,
       season TEXT NOT NULL, tags_json TEXT NOT NULL, cover_path TEXT, cover_paths_json TEXT,
-      notes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      notes TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     )''');
     await db.execute('''CREATE TABLE outfit_entries(
       id INTEGER PRIMARY KEY AUTOINCREMENT, outfit_id TEXT NOT NULL,
@@ -421,6 +495,17 @@ class AppDatabase {
     )).map(WardrobeTag.fromMap).toList();
   }
 
+  /// 用云端快照替换本机搭配标签缓存。
+  Future<void> replaceOutfitTags(List<WardrobeTag> tags) async {
+    final db = await instance;
+    await db.transaction((txn) async {
+      await txn.delete('outfit_tags');
+      for (final tag in tags) {
+        await txn.insert('outfit_tags', tag.toMap());
+      }
+    });
+  }
+
   Future<void> saveOutfitTag(WardrobeTag tag) async => (await instance).insert(
     'outfit_tags',
     tag.toMap(),
@@ -499,10 +584,10 @@ class AppDatabase {
           coverPath: row['cover_path'] as String?,
           coverPaths: _coverPaths(row),
           notes: row['notes'] as String?,
-          createdAt: DateTime.parse(row['created_at']! as String),
+          createdAt: parseTimestamp(row['created_at'])!,
           updatedAt:
-              DateTime.tryParse(row['updated_at'] as String? ?? '') ??
-              DateTime.parse(row['created_at']! as String),
+              parseTimestamp(row['updated_at']) ??
+              parseTimestamp(row['created_at'])!,
           entries: entryRows
               .map(
                 (entry) => OutfitEntry(
@@ -521,7 +606,26 @@ class AppDatabase {
   Future<void> saveOutfit(Outfit outfit) async {
     final db = await instance;
     await db.transaction((txn) async {
-      await txn.insert('outfits', {
+      await _insertOutfitRow(txn, outfit);
+      await _replaceOutfitEntries(txn, outfit);
+    });
+  }
+
+  /// 用云端快照替换本机搭配缓存，防止不同账号之间的数据混合。
+  Future<void> replaceOutfits(List<Outfit> outfits) async {
+    final db = await instance;
+    await db.transaction((txn) async {
+      await txn.delete('outfit_entries');
+      await txn.delete('outfits');
+      for (final outfit in outfits) {
+        await _insertOutfitRow(txn, outfit);
+        await _replaceOutfitEntries(txn, outfit);
+      }
+    });
+  }
+
+  Future<void> _insertOutfitRow(DatabaseExecutor txn, Outfit outfit) =>
+      txn.insert('outfits', {
         'id': outfit.id,
         'name': outfit.name,
         'occasion': outfit.occasion,
@@ -530,25 +634,29 @@ class AppDatabase {
         'cover_path': outfit.photos.isEmpty ? null : outfit.photos.first,
         'cover_paths_json': jsonEncode(outfit.photos),
         'notes': outfit.notes,
-        'created_at': outfit.createdAt.toIso8601String(),
-        'updated_at': outfit.updatedAt.toIso8601String(),
+        'created_at': toTimestamp(outfit.createdAt),
+        'updated_at': toTimestamp(outfit.updatedAt),
       }, conflictAlgorithm: ConflictAlgorithm.replace);
-      await txn.delete(
-        'outfit_entries',
-        where: 'outfit_id = ?',
-        whereArgs: [outfit.id],
-      );
-      for (var i = 0; i < outfit.entries.length; i++) {
-        final entry = outfit.entries[i];
-        await txn.insert('outfit_entries', {
-          'outfit_id': outfit.id,
-          'item_id': entry.itemId,
-          'item_name': entry.name,
-          'image_path': entry.imagePath,
-          'position': i,
-        });
-      }
-    });
+
+  Future<void> _replaceOutfitEntries(
+    DatabaseExecutor txn,
+    Outfit outfit,
+  ) async {
+    await txn.delete(
+      'outfit_entries',
+      where: 'outfit_id = ?',
+      whereArgs: [outfit.id],
+    );
+    for (var i = 0; i < outfit.entries.length; i++) {
+      final entry = outfit.entries[i];
+      await txn.insert('outfit_entries', {
+        'outfit_id': outfit.id,
+        'item_id': entry.itemId,
+        'item_name': entry.name,
+        'image_path': entry.imagePath,
+        'position': i,
+      });
+    }
   }
 
   List<String> _coverPaths(Map<String, Object?> row) {

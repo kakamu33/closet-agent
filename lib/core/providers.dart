@@ -4,7 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../features/auth/data/cloudbase_auth_repository.dart';
 import '../features/auth/domain/auth_repository.dart';
 import '../features/auth/domain/auth_user.dart';
+import '../features/outfits/data/cloudbase_outfit_repository.dart';
 import '../features/outfits/domain/outfit.dart';
+import '../features/outfits/domain/outfit_tag.dart';
 import '../features/settings/domain/user_profile.dart';
 import '../features/wardrobe/data/background_removal_service.dart';
 import '../features/wardrobe/data/cloudbase_wardrobe_repository.dart';
@@ -22,6 +24,9 @@ final cloudBaseWardrobeRepositoryProvider =
     Provider<CloudBaseWardrobeRepository>(
       (ref) => CloudBaseWardrobeRepository(),
     );
+final cloudBaseOutfitRepositoryProvider = Provider<CloudBaseOutfitRepository>(
+  (ref) => CloudBaseOutfitRepository(),
+);
 final backgroundRemovalServiceProvider = Provider<BackgroundRemovalService>(
   (ref) => const BackgroundRemovalService(),
 );
@@ -349,44 +354,112 @@ class WardrobeTagsController extends AsyncNotifier<List<WardrobeTag>>
     }
   }
 
+  /// 保存（新增或改名）一个标签。
+  ///
+  /// 本地写入始终执行；云端同步失败时不阻断本地操作，但会把异常重新
+  /// 抛给调用方（UI 层据此提示用户"已保存到本机，云端同步失败"），
+  /// 同时避免因为异常提前退出而漏掉 [ref.invalidateSelf]——否则本地
+  /// 明明写入成功，界面却因为没有刷新而看起来"毫无变化"。
   Future<void> save(WardrobeTag tag) async {
     final currentTags = await future;
     validateTagName(tag, currentTags);
     await _db.saveTag(tag);
-    await syncToCloudIfSignedIn(
-      (session) => _cloud.saveTag(
-        user: session.user,
-        accessToken: session.accessToken,
-        tag: tag,
-        existingTags: currentTags,
-      ),
-    );
-    ref.invalidateSelf();
-  }
-
-  Future<void> reorder(List<WardrobeTag> tags) async {
-    await _db.reorderTags(tags);
-    await syncToCloudIfSignedIn((session) async {
-      for (final tag in tags) {
-        await _cloud.saveTag(
+    Object? cloudError;
+    try {
+      await syncToCloudIfSignedIn(
+        (session) => _cloud.saveTag(
           user: session.user,
           accessToken: session.accessToken,
           tag: tag,
-          existingTags: tags,
-        );
-      }
-    });
+          existingTags: currentTags,
+        ),
+      );
+    } catch (error) {
+      cloudError = error;
+    }
     ref.invalidateSelf();
+    if (cloudError != null) throw cloudError;
   }
 
-  Future<void> remove(String id) async {
-    await syncToCloudIfSignedIn(
-      (session) =>
-          _cloud.deleteTag(accessToken: session.accessToken, tagId: id),
+  Future<void> reorder(List<WardrobeTag> tags) async {
+    // ReorderableListView 传来的标签对象仍带着拖拽前的 sortOrder；本地
+    // reorderTags 会按列表位置重新编号，但同步云端时也必须发送相同的新值，
+    // 否则云端会被旧 sortOrder 覆盖，并在刷新时把本地顺序回滚。
+    final reorderedTags = _withUpdatedSortOrders(tags);
+    await _db.reorderTags(reorderedTags);
+    Object? cloudError;
+    try {
+      await syncToCloudIfSignedIn(
+        (session) => _syncReorderedTags(session, reorderedTags),
+      );
+    } catch (error) {
+      cloudError = error;
+    }
+    ref.invalidateSelf();
+    if (cloudError != null) throw cloudError;
+  }
+
+  /// 分两阶段同步排序，避免云端存在 `(user_id, parent_id, sort_order)`
+  /// 唯一约束时，交换两个已有位置会在逐条更新的中间状态发生冲突。
+  Future<void> _syncReorderedTags(
+    CloudSession session,
+    List<WardrobeTag> reorderedTags,
+  ) async {
+    final highestSortOrder = reorderedTags.fold<int>(
+      -1,
+      (highest, tag) => tag.sortOrder > highest ? tag.sortOrder : highest,
     );
+    final temporaryTags = [
+      for (var index = 0; index < reorderedTags.length; index++)
+        WardrobeTag(
+          id: reorderedTags[index].id,
+          name: reorderedTags[index].name,
+          parentId: reorderedTags[index].parentId,
+          sortOrder: highestSortOrder + reorderedTags.length + index + 1,
+        ),
+    ];
+    for (final tag in temporaryTags) {
+      await _cloud.saveTag(
+        user: session.user,
+        accessToken: session.accessToken,
+        tag: tag,
+        existingTags: temporaryTags,
+      );
+    }
+    for (final tag in reorderedTags) {
+      await _cloud.saveTag(
+        user: session.user,
+        accessToken: session.accessToken,
+        tag: tag,
+        existingTags: reorderedTags,
+      );
+    }
+  }
+
+  List<WardrobeTag> _withUpdatedSortOrders(List<WardrobeTag> tags) => [
+    for (var index = 0; index < tags.length; index++)
+      WardrobeTag(
+        id: tags[index].id,
+        name: tags[index].name,
+        parentId: tags[index].parentId,
+        sortOrder: index,
+      ),
+  ];
+
+  Future<void> remove(String id) async {
+    Object? cloudError;
+    try {
+      await syncToCloudIfSignedIn(
+        (session) =>
+            _cloud.deleteTag(accessToken: session.accessToken, tagId: id),
+      );
+    } catch (error) {
+      cloudError = error;
+    }
     await _db.deleteTag(id);
     ref.invalidateSelf();
     ref.invalidate(wardrobeItemsProvider);
+    if (cloudError != null) throw cloudError;
   }
 }
 
@@ -398,37 +471,208 @@ final outfitsProvider = AsyncNotifierProvider<OutfitController, List<Outfit>>(
   OutfitController.new,
 );
 
-class OutfitTagsController extends AsyncNotifier<List<WardrobeTag>> {
+class OutfitTagsController extends AsyncNotifier<List<WardrobeTag>>
+    with CloudSessionMixin {
   AppDatabase get _db => ref.read(databaseProvider);
+  CloudBaseOutfitRepository get _cloud =>
+      ref.read(cloudBaseOutfitRepositoryProvider);
+
   @override
-  Future<List<WardrobeTag>> build() => _db.outfitTags();
+  Future<List<WardrobeTag>> build() async {
+    final localTags = await _db.outfitTags();
+    final session = await cloudSession();
+    if (session == null) return localTags;
+    try {
+      var cloudTags = await _cloud.fetchTags(
+        accessToken: session.accessToken,
+      );
+      // 新用户首次登录/注册时云端无标签，自动播种默认搭配标签。
+      if (cloudTags.isEmpty) {
+        cloudTags = await _seedDefaultTags(session);
+      }
+      // 播种失败时云端仍是空列表——保留本地默认标签缓存，避免把用户能看到
+      // 的标签清空；用户下次操作标签（新增/改名）时会自动重新与云端同步。
+      if (cloudTags.isEmpty) return localTags;
+      await _db.replaceOutfitTags(cloudTags);
+      return cloudTags;
+    } on CloudBaseException {
+      return localTags;
+    }
+  }
+
+  /// 向云端写入默认搭配标签（确定性 ID，避免重复），并返回写入后的标签列表。
+  Future<List<WardrobeTag>> _seedDefaultTags(CloudSession session) async {
+    for (final tag in defaultOutfitTags) {
+      try {
+        await _cloud.saveTag(
+          user: session.user,
+          accessToken: session.accessToken,
+          tag: tag,
+          existingTags: const [],
+        );
+      } on CloudBaseException catch (error) {
+        // 播种失败不阻断：用户可后续手动添加标签；打印出来便于排查，
+        // 避免云端接口出问题时完全没有任何痕迹可查。
+        debugPrint('[OutfitTagsController] 播种默认标签 "${tag.name}" 失败: $error');
+      }
+    }
+    try {
+      return await _cloud.fetchTags(accessToken: session.accessToken);
+    } on CloudBaseException catch (error) {
+      debugPrint('[OutfitTagsController] 播种后重新拉取标签失败: $error');
+      return const [];
+    }
+  }
+
+  /// 保存（新增或改名）一个标签。
+  ///
+  /// 本地写入始终执行；云端同步失败时不阻断本地操作，但会把异常重新
+  /// 抛给调用方（UI 层据此提示用户"已保存到本机，云端同步失败"），
+  /// 同时避免因为异常提前退出而漏掉 [ref.invalidateSelf]——否则本地
+  /// 明明写入成功，界面却因为没有刷新而看起来"毫无变化"。
   Future<void> save(WardrobeTag tag) async {
+    final currentTags = await future;
+    validateTagName(tag, currentTags);
     await _db.saveOutfitTag(tag);
+    Object? cloudError;
+    try {
+      await syncToCloudIfSignedIn(
+        (session) => _cloud.saveTag(
+          user: session.user,
+          accessToken: session.accessToken,
+          tag: tag,
+          existingTags: currentTags,
+        ),
+      );
+    } catch (error) {
+      cloudError = error;
+    }
     ref.invalidateSelf();
+    if (cloudError != null) throw cloudError;
   }
 
   Future<void> reorder(List<WardrobeTag> tags) async {
-    await _db.reorderOutfitTags(tags);
+    // ReorderableListView 传来的标签对象仍带着拖拽前的 sortOrder；本地
+    // reorderOutfitTags 会按列表位置重新编号，但同步云端时也必须发送相同的
+    // 新值，否则云端会被旧 sortOrder 覆盖，并在刷新时把本地顺序回滚。
+    final reorderedTags = _withUpdatedSortOrders(tags);
+    await _db.reorderOutfitTags(reorderedTags);
+    Object? cloudError;
+    try {
+      await syncToCloudIfSignedIn(
+        (session) => _syncReorderedTags(session, reorderedTags),
+      );
+    } catch (error) {
+      cloudError = error;
+    }
     ref.invalidateSelf();
+    if (cloudError != null) throw cloudError;
   }
 
+  /// 分两阶段同步排序，避免云端存在 `(user_id, parent_id, sort_order)`
+  /// 唯一约束时，交换两个已有位置会在逐条更新的中间状态发生冲突。
+  Future<void> _syncReorderedTags(
+    CloudSession session,
+    List<WardrobeTag> reorderedTags,
+  ) async {
+    final highestSortOrder = reorderedTags.fold<int>(
+      -1,
+      (highest, tag) => tag.sortOrder > highest ? tag.sortOrder : highest,
+    );
+    final temporaryTags = [
+      for (var index = 0; index < reorderedTags.length; index++)
+        WardrobeTag(
+          id: reorderedTags[index].id,
+          name: reorderedTags[index].name,
+          parentId: reorderedTags[index].parentId,
+          sortOrder: highestSortOrder + reorderedTags.length + index + 1,
+        ),
+    ];
+    for (final tag in temporaryTags) {
+      await _cloud.saveTag(
+        user: session.user,
+        accessToken: session.accessToken,
+        tag: tag,
+        existingTags: temporaryTags,
+      );
+    }
+    for (final tag in reorderedTags) {
+      await _cloud.saveTag(
+        user: session.user,
+        accessToken: session.accessToken,
+        tag: tag,
+        existingTags: reorderedTags,
+      );
+    }
+  }
+
+  List<WardrobeTag> _withUpdatedSortOrders(List<WardrobeTag> tags) => [
+    for (var index = 0; index < tags.length; index++)
+      WardrobeTag(
+        id: tags[index].id,
+        name: tags[index].name,
+        parentId: tags[index].parentId,
+        sortOrder: index,
+      ),
+  ];
+
   Future<void> remove(String id) async {
+    Object? cloudError;
+    try {
+      await syncToCloudIfSignedIn(
+        (session) =>
+            _cloud.deleteTag(accessToken: session.accessToken, tagId: id),
+      );
+    } catch (error) {
+      cloudError = error;
+    }
     await _db.deleteOutfitTag(id);
     ref.invalidateSelf();
     ref.invalidate(outfitsProvider);
+    if (cloudError != null) throw cloudError;
   }
 }
 
-class OutfitController extends AsyncNotifier<List<Outfit>> {
+class OutfitController extends AsyncNotifier<List<Outfit>>
+    with CloudSessionMixin {
   AppDatabase get _db => ref.read(databaseProvider);
+  CloudBaseOutfitRepository get _cloud =>
+      ref.read(cloudBaseOutfitRepositoryProvider);
+
   @override
-  Future<List<Outfit>> build() => _db.outfits();
+  Future<List<Outfit>> build() async {
+    final localOutfits = await _db.outfits();
+    final session = await cloudSession();
+    if (session == null) return localOutfits;
+    try {
+      final cloudOutfits = await _cloud.fetchOutfits(
+        accessToken: session.accessToken,
+      );
+      await _db.replaceOutfits(cloudOutfits);
+      return cloudOutfits;
+    } on CloudBaseException {
+      // 离线或云端暂不可用时仍可继续使用本地搭配，稍后保存会再次同步。
+      return localOutfits;
+    }
+  }
+
   Future<void> save(Outfit outfit) async {
     await _db.saveOutfit(outfit);
+    await syncToCloudIfSignedIn(
+      (session) => _cloud.saveOutfit(
+        user: session.user,
+        accessToken: session.accessToken,
+        outfit: outfit,
+      ),
+    );
     ref.invalidateSelf();
   }
 
   Future<void> remove(String id) async {
+    await syncToCloudIfSignedIn(
+      (session) =>
+          _cloud.deleteOutfit(accessToken: session.accessToken, outfitId: id),
+    );
     await _db.deleteOutfit(id);
     ref.invalidateSelf();
   }

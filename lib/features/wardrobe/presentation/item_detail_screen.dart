@@ -144,7 +144,7 @@ class _ItemDetailScreenState extends ConsumerState<ItemDetailScreen> {
             error: (error, _) => Text('加载失败：$error'),
           ),
           const SizedBox(height: 28),
-          Text('创建于 ${timestamp.format(_item.createdAt)}\n更新于 ${timestamp.format(_item.updatedAt)}', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+          Text('创建于 ${timestamp.format(_item.createdAt.toLocal())}\n更新于 ${timestamp.format(_item.updatedAt.toLocal())}', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
         ],
       ),
     );

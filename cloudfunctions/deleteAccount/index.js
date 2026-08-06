@@ -33,7 +33,13 @@ const GATEWAY_HOST =
 const TcbClient = tencentcloud.tcb.v20180608.Client;
 
 /** 需要级联清理的业务表；顺序不重要，因为最终以 SQL 事务方式一次性删除。 */
-const OWNED_TABLES = ['wardrobe_items', 'wardrobe_tags', 'user_profiles'];
+const OWNED_TABLES = [
+  'wardrobe_items',
+  'wardrobe_tags',
+  'outfits',
+  'outfit_tags',
+  'user_profiles',
+];
 
 exports.main = async (event, context) => {
   try {

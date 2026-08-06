@@ -8,6 +8,7 @@ import '../../features/wardrobe/domain/wardrobe_canvas_layout.dart';
 import '../../features/wardrobe/domain/wardrobe_canvas_region.dart';
 import '../../features/wardrobe/domain/wardrobe_item.dart';
 import '../../features/wardrobe/domain/wardrobe_tag.dart';
+import '../time_utils.dart';
 
 class AppDatabase {
   static const _itemsKey = 'diexu.wardrobe_items';
@@ -134,8 +135,17 @@ class AppDatabase {
   }
 
   Future<List<WardrobeTag>> tags() async {
-    final values = _readList(_tagsKey);
+    var values = _readList(_tagsKey);
     var changed = false;
+    // 清理旧版本代码遗留的非法 id（历史上默认标签用过 'tops' 这类字符串，
+    // 而云端 wardrobe_tags.id 是 uuid 类型）；留在本地不会立刻报错，但
+    // 一旦被当成 existingTags 之一参与云端同步就会导致
+    // invalid input syntax for type uuid 报错。
+    final beforeCount = values.length;
+    values = values
+        .where((value) => isValidTagId(value['id'] as String? ?? ''))
+        .toList();
+    if (values.length != beforeCount) changed = true;
     if (values.isEmpty) {
       values.addAll(defaultWardrobeTags.map((tag) => tag.toMap()));
       changed = true;
@@ -207,16 +217,32 @@ class AppDatabase {
   }
 
   Future<List<WardrobeTag>> outfitTags() async {
-    final values = _readList(_outfitTagsKey);
+    var values = _readList(_outfitTagsKey);
+    var changed = false;
+    // 清理旧版本代码遗留的非法 id（历史上默认搭配标签用过 'outfit_daily'
+    // 这类字符串，而云端 outfit_tags.id 是 uuid 类型）；留在本地不会立刻
+    // 报错，但一旦被当成 existingTags 之一参与云端同步就会导致
+    // invalid input syntax for type uuid 报错。
+    final beforeCount = values.length;
+    values = values
+        .where((value) => isValidTagId(value['id'] as String? ?? ''))
+        .toList();
+    if (values.length != beforeCount) changed = true;
     if (values.isEmpty) {
       values.addAll(defaultOutfitTags.map((tag) => tag.toMap()));
-      _writeList(_outfitTagsKey, values);
+      changed = true;
     }
+    if (changed) _writeList(_outfitTagsKey, values);
     return values.map(WardrobeTag.fromMap).toList()..sort(
       (a, b) => a.isPrimary == b.isPrimary
           ? a.sortOrder.compareTo(b.sortOrder)
           : (a.isPrimary ? -1 : 1),
     );
+  }
+
+  /// 用云端快照替换浏览器内的搭配标签缓存。
+  Future<void> replaceOutfitTags(List<WardrobeTag> tags) async {
+    _writeList(_outfitTagsKey, tags.map((tag) => tag.toMap()).toList());
   }
 
   Future<void> saveOutfitTag(WardrobeTag tag) async {
@@ -275,33 +301,17 @@ class AppDatabase {
 
   Future<void> saveOutfit(Outfit outfit) async {
     final values = _readList(_outfitsKey);
-    final data = {
-      'id': outfit.id,
-      'name': outfit.name,
-      'occasion': outfit.occasion,
-      'season': outfit.season,
-      'tags_json': jsonEncode(outfit.tags),
-      'cover_path': outfit.photos.isEmpty ? null : outfit.photos.first,
-      'cover_paths_json': jsonEncode(outfit.photos),
-      'notes': outfit.notes,
-      'created_at': outfit.createdAt.toIso8601String(),
-      'updated_at': outfit.updatedAt.toIso8601String(),
-      'entries': outfit.entries
-          .map(
-            (entry) => {
-              'item_id': entry.itemId,
-              'item_name': entry.name,
-              'image_path': entry.imagePath,
-            },
-          )
-          .toList(),
-    };
     final index = values.indexWhere((value) => value['id'] == outfit.id);
     if (index == -1)
-      values.add(data);
+      values.add(_outfitToJson(outfit));
     else
-      values[index] = data;
+      values[index] = _outfitToJson(outfit);
     _writeList(_outfitsKey, values);
+  }
+
+  /// 用云端快照替换浏览器内的搭配缓存，防止不同账号之间的数据混合。
+  Future<void> replaceOutfits(List<Outfit> outfits) async {
+    _writeList(_outfitsKey, outfits.map(_outfitToJson).toList());
   }
 
   Future<void> deleteOutfit(String id) async {
@@ -325,6 +335,28 @@ class AppDatabase {
 
   void _writeList(String key, List<Map<String, Object?>> values) =>
       html.window.localStorage[key] = jsonEncode(values);
+  Map<String, Object?> _outfitToJson(Outfit outfit) => {
+    'id': outfit.id,
+    'name': outfit.name,
+    'occasion': outfit.occasion,
+    'season': outfit.season,
+    'tags_json': jsonEncode(outfit.tags),
+    'cover_path': outfit.photos.isEmpty ? null : outfit.photos.first,
+    'cover_paths_json': jsonEncode(outfit.photos),
+    'notes': outfit.notes,
+    'created_at': toTimestamp(outfit.createdAt),
+    'updated_at': toTimestamp(outfit.updatedAt),
+    'entries': outfit.entries
+        .map(
+          (entry) => {
+            'item_id': entry.itemId,
+            'item_name': entry.name,
+            'image_path': entry.imagePath,
+          },
+        )
+        .toList(),
+  };
+
   List<String> _coverPaths(Map<String, Object?> data) {
     final raw = data['cover_paths_json'] as String?;
     if (raw != null && raw.isNotEmpty)
@@ -341,10 +373,10 @@ class AppDatabase {
     coverPath: data['cover_path'] as String?,
     coverPaths: _coverPaths(data),
     notes: data['notes'] as String?,
-    createdAt: DateTime.parse(data['created_at']! as String),
+    createdAt: parseTimestamp(data['created_at'])!,
     updatedAt:
-        DateTime.tryParse(data['updated_at'] as String? ?? '') ??
-        DateTime.parse(data['created_at']! as String),
+        parseTimestamp(data['updated_at']) ??
+        parseTimestamp(data['created_at'])!,
     entries: (data['entries'] as List? ?? <Object?>[])
         .map((entry) => Map<String, Object?>.from(entry as Map))
         .map(

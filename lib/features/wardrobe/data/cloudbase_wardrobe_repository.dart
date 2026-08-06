@@ -1,4 +1,5 @@
 import '../../../core/cloudbase/cloudbase_client.dart';
+import '../../../core/time_utils.dart';
 import '../../auth/domain/auth_user.dart';
 import '../domain/wardrobe_item.dart';
 import '../domain/wardrobe_tag.dart';
@@ -80,8 +81,8 @@ class CloudBaseWardrobeRepository {
         'notes': item.notes,
         'currency': item.currency,
         'price': item.price,
-        'created_at': item.createdAt.toUtc().toIso8601String(),
-        'updated_at': item.updatedAt.toUtc().toIso8601String(),
+        'created_at': toTimestamp(item.createdAt),
+        'updated_at': toTimestamp(item.updatedAt),
         'deleted_at': null,
       },
       extraHeaders: const {
@@ -185,8 +186,8 @@ class CloudBaseWardrobeRepository {
       error.statusCode == 409 || error.message.contains('duplicate key');
 
   WardrobeItem _itemFromCloud(Map<String, Object?> value) {
-    final createdAt = value['created_at'];
-    if (createdAt is! String) {
+    final createdAt = parseTimestamp(value['created_at']);
+    if (createdAt == null) {
       throw const CloudBaseException('云端衣物缺少必要字段');
     }
     return WardrobeItem(
@@ -199,10 +200,8 @@ class CloudBaseWardrobeRepository {
       notes: value['notes'] as String?,
       currency: value['currency'] as String? ?? 'CNY',
       price: (value['price'] as num?)?.toDouble(),
-      createdAt: DateTime.parse(createdAt),
-      updatedAt:
-          DateTime.tryParse(value['updated_at'] as String? ?? '') ??
-          DateTime.parse(createdAt),
+      createdAt: createdAt,
+      updatedAt: parseTimestamp(value['updated_at']) ?? createdAt,
     );
   }
 

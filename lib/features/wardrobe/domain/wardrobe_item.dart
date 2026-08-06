@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import '../../../core/time_utils.dart';
+
 class WardrobeItem {
   const WardrobeItem({
     required this.id,
@@ -57,8 +59,8 @@ class WardrobeItem {
     'notes': notes,
     'currency': currency,
     'price': price,
-    'created_at': createdAt.toIso8601String(),
-    'updated_at': updatedAt.toIso8601String(),
+    'created_at': toTimestamp(createdAt),
+    'updated_at': toTimestamp(updatedAt),
   };
 
   factory WardrobeItem.fromMap(Map<String, Object?> map) {
@@ -70,6 +72,7 @@ class WardrobeItem {
     final tags = rawTags == null || rawTags.isEmpty
         ? const <String>[]
         : (jsonDecode(rawTags) as List).cast<String>();
+    final createdAt = parseTimestamp(map['created_at'])!;
     return WardrobeItem(
       id: map['id']! as String,
       name: map['name']! as String,
@@ -80,10 +83,8 @@ class WardrobeItem {
       notes: map['notes'] as String?,
       currency: map['currency'] as String? ?? 'CNY',
       price: (map['price'] as num?)?.toDouble(),
-      createdAt: DateTime.parse(map['created_at']! as String),
-      updatedAt:
-          DateTime.tryParse(map['updated_at'] as String? ?? '') ??
-          DateTime.parse(map['created_at']! as String),
+      createdAt: createdAt,
+      updatedAt: parseTimestamp(map['updated_at']) ?? createdAt,
     );
   }
 }
