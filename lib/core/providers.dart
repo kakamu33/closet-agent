@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
 import '../features/auth/data/cloudbase_auth_repository.dart';
 import '../features/auth/domain/auth_repository.dart';
@@ -99,6 +100,20 @@ class CloudSession {
 
   final AuthUser user;
   final String accessToken;
+}
+
+/// 将刚完成排序的同级标签替换回完整标签列表，保留其他一级/二级标签的
+/// 相对位置与数据；界面可立即使用这一完整列表完成无回弹的重建。
+List<WardrobeTag> _mergeReorderedTagGroup(
+  List<WardrobeTag> currentTags,
+  List<WardrobeTag> reorderedGroup,
+) {
+  final reorderedIds = reorderedGroup.map((tag) => tag.id).toSet();
+  var groupIndex = 0;
+  return [
+    for (final tag in currentTags)
+      if (reorderedIds.contains(tag.id)) reorderedGroup[groupIndex++] else tag,
+  ];
 }
 
 class AuthSessionController extends AsyncNotifier<AuthUser?> {
@@ -313,9 +328,7 @@ class WardrobeTagsController extends AsyncNotifier<List<WardrobeTag>>
     final session = await cloudSession();
     if (session == null) return localTags;
     try {
-      var cloudTags = await _cloud.fetchTags(
-        accessToken: session.accessToken,
-      );
+      var cloudTags = await _cloud.fetchTags(accessToken: session.accessToken);
       // 新用户首次登录/注册时云端无标签，自动播种默认标签
       if (cloudTags.isEmpty) {
         cloudTags = await _seedDefaultTags(session);
@@ -332,7 +345,13 @@ class WardrobeTagsController extends AsyncNotifier<List<WardrobeTag>>
 
   /// 向云端写入默认标签（确定性 ID，避免重复），并返回写入后的标签列表。
   Future<List<WardrobeTag>> _seedDefaultTags(CloudSession session) async {
-    for (final tag in defaultWardrobeTags) {
+    for (final defaultTag in defaultWardrobeTags) {
+      final tag = WardrobeTag(
+        id: const Uuid().v4(),
+        name: defaultTag.name,
+        parentId: defaultTag.parentId,
+        sortOrder: defaultTag.sortOrder,
+      );
       try {
         await _cloud.saveTag(
           user: session.user,
@@ -382,11 +401,22 @@ class WardrobeTagsController extends AsyncNotifier<List<WardrobeTag>>
   }
 
   Future<void> reorder(List<WardrobeTag> tags) async {
-    // ReorderableListView 传来的标签对象仍带着拖拽前的 sortOrder；本地
-    // reorderTags 会按列表位置重新编号，但同步云端时也必须发送相同的新值，
-    // 否则云端会被旧 sortOrder 覆盖，并在刷新时把本地顺序回滚。
+    // onReorderItem 结束拖拽时，先让界面立即使用新顺序，避免等待本地/云端
+    // 写入期间 ReorderableListView 根据旧 Provider 数据回弹。
+    final currentTags = state is AsyncData<List<WardrobeTag>>
+        ? (state as AsyncData<List<WardrobeTag>>).value
+        : await future;
     final reorderedTags = _withUpdatedSortOrders(tags);
-    await _db.reorderTags(reorderedTags);
+    final optimisticTags = _mergeReorderedTagGroup(currentTags, reorderedTags);
+    state = AsyncData(optimisticTags);
+
+    try {
+      await _db.reorderTags(reorderedTags);
+    } catch (_) {
+      state = AsyncData(currentTags);
+      rethrow;
+    }
+
     Object? cloudError;
     try {
       await syncToCloudIfSignedIn(
@@ -395,7 +425,6 @@ class WardrobeTagsController extends AsyncNotifier<List<WardrobeTag>>
     } catch (error) {
       cloudError = error;
     }
-    ref.invalidateSelf();
     if (cloudError != null) throw cloudError;
   }
 
@@ -483,9 +512,7 @@ class OutfitTagsController extends AsyncNotifier<List<WardrobeTag>>
     final session = await cloudSession();
     if (session == null) return localTags;
     try {
-      var cloudTags = await _cloud.fetchTags(
-        accessToken: session.accessToken,
-      );
+      var cloudTags = await _cloud.fetchTags(accessToken: session.accessToken);
       // 新用户首次登录/注册时云端无标签，自动播种默认搭配标签。
       if (cloudTags.isEmpty) {
         cloudTags = await _seedDefaultTags(session);
@@ -502,7 +529,13 @@ class OutfitTagsController extends AsyncNotifier<List<WardrobeTag>>
 
   /// 向云端写入默认搭配标签（确定性 ID，避免重复），并返回写入后的标签列表。
   Future<List<WardrobeTag>> _seedDefaultTags(CloudSession session) async {
-    for (final tag in defaultOutfitTags) {
+    for (final defaultTag in defaultOutfitTags) {
+      final tag = WardrobeTag(
+        id: const Uuid().v4(),
+        name: defaultTag.name,
+        parentId: defaultTag.parentId,
+        sortOrder: defaultTag.sortOrder,
+      );
       try {
         await _cloud.saveTag(
           user: session.user,
@@ -552,11 +585,22 @@ class OutfitTagsController extends AsyncNotifier<List<WardrobeTag>>
   }
 
   Future<void> reorder(List<WardrobeTag> tags) async {
-    // ReorderableListView 传来的标签对象仍带着拖拽前的 sortOrder；本地
-    // reorderOutfitTags 会按列表位置重新编号，但同步云端时也必须发送相同的
-    // 新值，否则云端会被旧 sortOrder 覆盖，并在刷新时把本地顺序回滚。
+    // onReorderItem 结束拖拽时，先让界面立即使用新顺序，避免等待本地/云端
+    // 写入期间 ReorderableListView 根据旧 Provider 数据回弹。
+    final currentTags = state is AsyncData<List<WardrobeTag>>
+        ? (state as AsyncData<List<WardrobeTag>>).value
+        : await future;
     final reorderedTags = _withUpdatedSortOrders(tags);
-    await _db.reorderOutfitTags(reorderedTags);
+    final optimisticTags = _mergeReorderedTagGroup(currentTags, reorderedTags);
+    state = AsyncData(optimisticTags);
+
+    try {
+      await _db.reorderOutfitTags(reorderedTags);
+    } catch (_) {
+      state = AsyncData(currentTags);
+      rethrow;
+    }
+
     Object? cloudError;
     try {
       await syncToCloudIfSignedIn(
@@ -565,7 +609,6 @@ class OutfitTagsController extends AsyncNotifier<List<WardrobeTag>>
     } catch (error) {
       cloudError = error;
     }
-    ref.invalidateSelf();
     if (cloudError != null) throw cloudError;
   }
 

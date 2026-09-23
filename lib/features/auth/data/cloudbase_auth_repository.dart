@@ -26,8 +26,14 @@ class CloudBaseAuthRepository implements AuthRepository {
     final session = await _readSession();
     if (session == null) return null;
     if (session.expiresAt.isAfter(DateTime.now().toUtc())) {
-      await _ensureProfile(session.user, session.accessToken);
-      return session.user;
+      final user = await _loadCloudUser(session.user, session.accessToken);
+      if (user != session.user) {
+        await _store.write(
+          _sessionKey,
+          jsonEncode(session.copyWith(user: user).toJson()),
+        );
+      }
+      return user;
     }
     try {
       final response = await _client.requestObject(
@@ -39,8 +45,10 @@ class CloudBaseAuthRepository implements AuthRepository {
         },
         extraHeaders: {'x-device-id': await _deviceId()},
       );
-      await _saveSession(response, session.user);
-      return session.user;
+      final accessToken = _requiredString(response, 'access_token');
+      final user = await _loadCloudUser(session.user, accessToken);
+      await _saveSession(response, user);
+      return user;
     } on CloudBaseException {
       await _store.delete(_sessionKey);
       return null;
@@ -130,13 +138,12 @@ class CloudBaseAuthRepository implements AuthRepository {
         emailVerified: true,
         createdAt: DateTime.now().toUtc(),
       );
-      await _saveSession(tokenResponse, user);
-      await _ensureProfile(
-        user,
-        _requiredString(tokenResponse, 'access_token'),
-      );
+      final accessToken = _requiredString(tokenResponse, 'access_token');
+      await _ensureProfile(user, accessToken);
+      final cloudUser = await _loadCloudUser(user, accessToken);
+      await _saveSession(tokenResponse, cloudUser);
       await _store.write(_lastLoginIdentifierKey, normalizedUsername);
-      return user;
+      return cloudUser;
     } on CloudBaseException catch (error) {
       throw AuthException(_friendlyMessage(error));
     }
@@ -155,21 +162,18 @@ class CloudBaseAuthRepository implements AuthRepository {
         body: {'username': normalizedIdentifier, 'password': password},
         extraHeaders: {'x-device-id': await _deviceId()},
       );
-      final previous = await _readSession();
-      final user = AuthUser(
+      final accessToken = _requiredString(response, 'access_token');
+      final authenticatedUser = AuthUser(
         id: _requiredString(response, 'sub'),
-        username: normalizedIdentifier.contains('@')
-            ? previous?.user.username ?? normalizedIdentifier
-            : normalizedIdentifier,
-        nickname: previous?.user.nickname ?? '叠序用户',
-        email: normalizedIdentifier.contains('@')
-            ? normalizedIdentifier
-            : previous?.user.email ?? '',
+        // 登录标识只用于认证，资料必须以云端 user_profiles 为准。
+        username: normalizedIdentifier,
+        nickname: '叠序用户',
+        email: normalizedIdentifier.contains('@') ? normalizedIdentifier : '',
         emailVerified: true,
-        createdAt: previous?.user.createdAt ?? DateTime.now().toUtc(),
+        createdAt: DateTime.now().toUtc(),
       );
+      final user = await _loadCloudUser(authenticatedUser, accessToken);
       await _saveSession(response, user);
-      await _ensureProfile(user, _requiredString(response, 'access_token'));
       await _store.write(_lastLoginIdentifierKey, normalizedIdentifier);
       return user;
     } on CloudBaseException catch (error) {
@@ -231,7 +235,9 @@ class CloudBaseAuthRepository implements AuthRepository {
         extraHeaders: {'x-device-id': await _deviceId()},
       );
       if (result['success'] != true) {
-        throw AuthException((result['error'] as String?) ?? '注销失败，请稍后重试');
+        final detail = (result['detail'] as String?)?.trim();
+        final message = (result['error'] as String?) ?? '注销失败，请稍后重试';
+        throw AuthException(detail?.isNotEmpty == true ? '$message：$detail' : message);
       }
     } on CloudBaseException catch (error) {
       throw AuthException(_friendlyMessage(error));
@@ -239,6 +245,36 @@ class CloudBaseAuthRepository implements AuthRepository {
       // 无论云端删除是否完全成功，都不应让用户停留在一个残缺的已登录状态。
       await _store.delete(_sessionKey);
     }
+  }
+
+  /// 每次建立或恢复会话都以云端资料为唯一来源，避免用户名登录和邮箱登录
+  /// 因本地旧会话缓存而展示出不同的用户信息。
+  Future<AuthUser> _loadCloudUser(
+    AuthUser authenticatedUser,
+    String accessToken,
+  ) async {
+    final response = await _client.request(
+      'GET',
+      '/v1/rdb/rest/user_profiles',
+      accessToken: accessToken,
+      queryParameters: {
+        'user_id': 'eq.${authenticatedUser.id}',
+        'select': 'user_id,username,email,nickname',
+        'limit': '1',
+      },
+    );
+    if (response is! List || response.length != 1 || response.single is! Map) {
+      throw const AuthException('未找到云端账号资料，请重新登录或联系支持');
+    }
+    final profile = Map<String, Object?>.from(response.single as Map);
+    return AuthUser(
+      id: _requiredString(profile, 'user_id'),
+      username: _requiredString(profile, 'username'),
+      nickname: _requiredString(profile, 'nickname'),
+      email: _requiredString(profile, 'email'),
+      emailVerified: true,
+      createdAt: authenticatedUser.createdAt,
+    );
   }
 
   /// 创建与 CloudBase Auth 用户一一对应的业务资料行。
@@ -340,6 +376,13 @@ class _CloudBaseSession {
   final String refreshToken;
   final DateTime expiresAt;
   final AuthUser user;
+
+  _CloudBaseSession copyWith({AuthUser? user}) => _CloudBaseSession(
+    accessToken: accessToken,
+    refreshToken: refreshToken,
+    expiresAt: expiresAt,
+    user: user ?? this.user,
+  );
 
   Map<String, Object?> toJson() => {
     'access_token': accessToken,

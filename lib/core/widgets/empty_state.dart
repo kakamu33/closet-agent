@@ -23,11 +23,11 @@ class EmptyState extends StatelessWidget {
         children: [
           Container(
             padding: const EdgeInsets.all(22),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.primaryContainer,
+            decoration: const BoxDecoration(
+              color: Color(0xFFF7DCC2),
               shape: BoxShape.circle,
             ),
-            child: Icon(icon, size: 36),
+            child: Icon(icon, size: 36, color: const Color(0xFF67482D)),
           ),
           const SizedBox(height: 20),
           Text(title, style: Theme.of(context).textTheme.titleLarge),

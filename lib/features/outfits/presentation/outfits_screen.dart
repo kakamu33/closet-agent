@@ -64,7 +64,26 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
     final outfits = ref.watch(outfitsProvider);
     final tags = ref.watch(outfitTagsProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('搭配灵感')),
+      appBar: AppBar(
+        titleSpacing: 18,
+        title: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _OutfitLogo(),
+            SizedBox(width: 9),
+            Text(
+              '搭配灵感',
+              style: TextStyle(
+                fontFamily: 'LXGWWenKai',
+                fontSize: 23,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF5C3A20),
+                letterSpacing: .4,
+              ),
+            ),
+          ],
+        ),
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () {
           _exitTagEditing();
@@ -87,27 +106,60 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
           return Column(
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
-                child: SearchBar(
-                  hintText: '搜索名称、标签、品牌、颜色或备注',
-                  leading: const Icon(Icons.search),
-                  onTap: () {
-                    _exitTagEditing();
-                    _openSearch('');
-                  },
-                  onSubmitted: (query) {
-                    _exitTagEditing();
-                    _openSearch(query);
-                  },
-                  trailing: [
-                    IconButton(
-                      onPressed: () {
+                padding: const EdgeInsets.fromLTRB(18, 2, 18, 12),
+                child: Container(
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: .46),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: const Color(0xFFDDD2C4),
+                      width: 1,
+                    ),
+                  ),
+                  child: Center(
+                    child: TextField(
+                      textAlignVertical: TextAlignVertical.center,
+                      style: const TextStyle(
+                        fontFamily: 'SourceHanSansCN',
+                        fontSize: 14,
+                        color: Color(0xFF382C20),
+                      ),
+                      decoration: const InputDecoration(
+                        filled: false,
+                        fillColor: Colors.transparent,
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        disabledBorder: InputBorder.none,
+                        isDense: true,
+                        prefixIcon: Icon(
+                          Icons.search_rounded,
+                          color: Color(0xFFA39A90),
+                          size: 18,
+                        ),
+                        prefixIconConstraints: BoxConstraints(
+                          minWidth: 40,
+                          minHeight: 40,
+                        ),
+                        hintText: '搜索名称、标签、颜色',
+                        hintStyle: TextStyle(
+                          fontFamily: 'SourceHanSansCN',
+                          fontSize: 14,
+                          color: Color(0xFFA39A90),
+                        ),
+                        contentPadding: EdgeInsets.symmetric(vertical: 11),
+                      ),
+                      onTap: () {
                         _exitTagEditing();
                         _openSearch('');
                       },
-                      icon: const Icon(Icons.arrow_forward),
+                      onSubmitted: (query) {
+                        _exitTagEditing();
+                        _openSearch(query);
+                      },
                     ),
-                  ],
+                  ),
                 ),
               ),
               _TagBar(
@@ -178,7 +230,7 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
                             }).toList();
                             if (all.isEmpty)
                               return EmptyState(
-                                icon: Icons.auto_awesome_mosaic_outlined,
+                                icon: Icons.auto_awesome_rounded,
                                 title: '收藏你的第一套搭配',
                                 message: '组合已录入单品，也可以写下暂未录入的单品。',
                                 action: FilledButton.icon(
@@ -256,7 +308,6 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
     int newIndex,
   ) async {
     final reordered = [...tags];
-    if (newIndex > oldIndex) newIndex--;
     final tag = reordered.removeAt(oldIndex);
     reordered.insert(newIndex, tag);
     try {
@@ -353,6 +404,25 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
   }
 }
 
+class _OutfitLogo extends StatelessWidget {
+  const _OutfitLogo();
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 36,
+    height: 36,
+    decoration: const BoxDecoration(
+      color: Color(0xFFEFE6D7),
+      shape: BoxShape.circle,
+    ),
+    child: const Icon(
+      Icons.auto_awesome_rounded,
+      color: Color(0xFF9A7546),
+      size: 20,
+    ),
+  );
+}
+
 class _TagBar extends StatelessWidget {
   const _TagBar({
     required this.tags,
@@ -396,10 +466,14 @@ class _TagBar extends StatelessWidget {
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 itemCount: tags.length,
-                onReorder: onReorder,
+                onReorderItem: onReorder,
                 onReorderStart: (_) => onStartEditing(),
                 buildDefaultDragHandles: false,
-                proxyDecorator: (child, index, animation) => child,
+                proxyDecorator: (child, index, animation) => Material(
+                  color: Colors.transparent,
+                  elevation: 0,
+                  child: IgnorePointer(child: child),
+                ),
                 itemBuilder: (context, index) {
                   final tag = tags[index];
                   return ReorderableDelayedDragStartListener(
@@ -516,10 +590,14 @@ class _DetailTagBar extends StatelessWidget {
                 Expanded(
                   child: ReorderableListView.builder(
                     itemCount: tags.length,
-                    onReorder: onReorder,
+                    onReorderItem: onReorder,
                     onReorderStart: (_) => onStartEditing(),
                     buildDefaultDragHandles: false,
-                    proxyDecorator: (child, index, animation) => child,
+                    proxyDecorator: (child, index, animation) => Material(
+                      color: Colors.transparent,
+                      elevation: 0,
+                      child: IgnorePointer(child: child),
+                    ),
                     itemBuilder: (context, index) {
                       final tag = tags[index];
                       return ReorderableDelayedDragStartListener(
@@ -654,13 +732,14 @@ class _TagChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     const radius = 10.0;
+    const selectedBackground = Color(0xFFEAD0AD);
+    const unselectedBackground = Color(0xFFF1E9DD);
+    const selectedText = Color(0xFF5C3A20);
+    const unselectedText = Color(0xFF756B60);
     final button = Material(
-      color: selected ? colors.secondaryContainer : colors.surface,
+      color: selected ? selectedBackground : unselectedBackground,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(radius),
-        side: BorderSide(
-          color: selected ? colors.secondary : colors.outlineVariant,
-        ),
       ),
       child: InkWell(
         onTap: onTap,
@@ -678,7 +757,10 @@ class _TagChip extends StatelessWidget {
               maxLines: vertical ? 2 : 1,
               textAlign: vertical ? TextAlign.center : TextAlign.start,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: vertical ? 12 : 13),
+              style: TextStyle(
+                fontSize: vertical ? 12 : 13,
+                color: selected ? selectedText : unselectedText,
+              ),
             ),
           ),
         ),

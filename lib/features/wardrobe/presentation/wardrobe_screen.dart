@@ -65,11 +65,33 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
     final itemState = ref.watch(wardrobeItemsProvider);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('我的衣橱'),
+        titleSpacing: 18,
+        title: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _WardrobeLogo(),
+            SizedBox(width: 9),
+            Text(
+              '衣橱',
+              style: TextStyle(
+                fontFamily: 'LXGWWenKai',
+                fontSize: 23,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF5C3A20),
+                letterSpacing: .4,
+              ),
+            ),
+          ],
+        ),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: FilledButton.tonalIcon(
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFFBE1C8),
+                foregroundColor: const Color(0xFF67482D),
+                elevation: 0,
+              ),
               onPressed: () => Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const WardrobeCanvasScreen()),
@@ -102,27 +124,60 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
           return Column(
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 4, 20, 14),
-                child: SearchBar(
-                  hintText: '搜索名称、标签、品牌、颜色或备注',
-                  leading: const Icon(Icons.search),
-                  onTap: () {
-                    _exitTagEditing();
-                    _openSearch('');
-                  },
-                  onSubmitted: (query) {
-                    _exitTagEditing();
-                    _openSearch(query);
-                  },
-                  trailing: [
-                    IconButton(
-                      onPressed: () {
+                padding: const EdgeInsets.fromLTRB(18, 2, 18, 12),
+                child: Container(
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: .46),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: const Color(0xFFDDD2C4),
+                      width: 1,
+                    ),
+                  ),
+                  child: Center(
+                    child: TextField(
+                      textAlignVertical: TextAlignVertical.center,
+                      style: const TextStyle(
+                        fontFamily: 'SourceHanSansCN',
+                        fontSize: 14,
+                        color: Color(0xFF382C20),
+                      ),
+                      decoration: const InputDecoration(
+                        filled: false,
+                        fillColor: Colors.transparent,
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        disabledBorder: InputBorder.none,
+                        isDense: true,
+                        prefixIcon: Icon(
+                          Icons.search_rounded,
+                          color: Color(0xFFA39A90),
+                          size: 18,
+                        ),
+                        prefixIconConstraints: BoxConstraints(
+                          minWidth: 40,
+                          minHeight: 40,
+                        ),
+                        hintText: '搜索名称、标签、颜色',
+                        hintStyle: TextStyle(
+                          fontFamily: 'SourceHanSansCN',
+                          fontSize: 14,
+                          color: Color(0xFFA39A90),
+                        ),
+                        contentPadding: EdgeInsets.symmetric(vertical: 11),
+                      ),
+                      onTap: () {
                         _exitTagEditing();
                         _openSearch('');
                       },
-                      icon: const Icon(Icons.arrow_forward),
+                      onSubmitted: (query) {
+                        _exitTagEditing();
+                        _openSearch(query);
+                      },
                     ),
-                  ],
+                  ),
                 ),
               ),
               _TagRow(
@@ -303,9 +358,7 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
                                             12,
                                           ),
                                           child: Text(
-                                            tagNames.isEmpty
-                                                ? '未分类'
-                                                : tagNames,
+                                            tagNames.isEmpty ? '未分类' : tagNames,
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
                                             style: Theme.of(
@@ -355,7 +408,6 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
     int newIndex,
   ) async {
     final reordered = [...tags];
-    if (newIndex > oldIndex) newIndex--;
     final tag = reordered.removeAt(oldIndex);
     reordered.insert(newIndex, tag);
     try {
@@ -375,7 +427,9 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
           controller: text,
           autofocus: true,
           maxLength: WardrobeTag.maxNameLength,
-          decoration: InputDecoration(hintText: '标签名称（最多 ${WardrobeTag.maxNameLength} 个字符）'),
+          decoration: InputDecoration(
+            hintText: '标签名称（最多 ${WardrobeTag.maxNameLength} 个字符）',
+          ),
         ),
         actions: [
           TextButton(
@@ -453,6 +507,25 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
   }
 }
 
+class _WardrobeLogo extends StatelessWidget {
+  const _WardrobeLogo();
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 36,
+    height: 36,
+    decoration: const BoxDecoration(
+      color: Color(0xFFEFE6D7),
+      shape: BoxShape.circle,
+    ),
+    child: const Icon(
+      Icons.checkroom_rounded,
+      color: Color(0xFF9A7546),
+      size: 21,
+    ),
+  );
+}
+
 class _TagRow extends StatelessWidget {
   const _TagRow({
     required this.tags,
@@ -499,10 +572,14 @@ class _TagRow extends StatelessWidget {
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 itemCount: tags.length,
-                onReorder: onReorder,
+                onReorderItem: onReorder,
                 onReorderStart: (_) => onStartEditing(),
                 buildDefaultDragHandles: false,
-                proxyDecorator: (child, index, animation) => child,
+                proxyDecorator: (child, index, animation) => Material(
+                  color: Colors.transparent,
+                  elevation: 0,
+                  child: IgnorePointer(child: child),
+                ),
                 itemBuilder: (context, index) {
                   final tag = tags[index];
                   return ReorderableDelayedDragStartListener(
@@ -620,10 +697,14 @@ class _DetailTags extends StatelessWidget {
                   child: ReorderableListView.builder(
                     padding: const EdgeInsets.symmetric(vertical: 4),
                     itemCount: tags.length,
-                    onReorder: onReorder,
+                    onReorderItem: onReorder,
                     onReorderStart: (_) => onStartEditing(),
                     buildDefaultDragHandles: false,
-                    proxyDecorator: (child, index, animation) => child,
+                    proxyDecorator: (child, index, animation) => Material(
+                      color: Colors.transparent,
+                      elevation: 0,
+                      child: IgnorePointer(child: child),
+                    ),
                     itemBuilder: (context, index) {
                       final tag = tags[index];
                       return ReorderableDelayedDragStartListener(
@@ -798,13 +879,13 @@ class _ManagedChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    const selectedBackground = Color(0xFFEAD0AD);
+    const unselectedBackground = Color(0xFFF1E9DD);
+    const selectedText = Color(0xFF5C3A20);
+    const unselectedText = Color(0xFF756B60);
     final chip = Material(
-      color: selected ? colors.secondaryContainer : colors.surface,
-      shape: StadiumBorder(
-        side: BorderSide(
-          color: selected ? colors.secondary : colors.outlineVariant,
-        ),
-      ),
+      color: selected ? selectedBackground : unselectedBackground,
+      shape: const StadiumBorder(),
       child: InkWell(
         onTap: onTap,
         onLongPress: onLongPress,
@@ -817,12 +898,18 @@ class _ManagedChip extends StatelessWidget {
           child: SizedBox(
             width: vertical ? double.infinity : null,
             child: vertical
-                ? _FourCharacterLabel(label: label, color: colors.onSurface)
+                ? _FourCharacterLabel(
+                    label: label,
+                    color: selected ? selectedText : unselectedText,
+                  )
                 : Text(
                     label,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: colors.onSurface, fontSize: 13),
+                    style: TextStyle(
+                      color: selected ? selectedText : unselectedText,
+                      fontSize: 13,
+                    ),
                   ),
           ),
         ),
@@ -845,7 +932,7 @@ class _ManagedChip extends StatelessWidget {
                   decoration: BoxDecoration(
                     color: colors.error,
                     shape: BoxShape.circle,
-                    border: Border.all(color: colors.surface, width: 1.5),
+                    border: Border.all(color: unselectedBackground, width: 1.5),
                   ),
                   child: const Padding(
                     padding: EdgeInsets.all(2),

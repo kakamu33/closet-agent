@@ -48,8 +48,19 @@ abstract final class AppTheme {
         ),
       ),
       floatingActionButtonTheme: const FloatingActionButtonThemeData(
-        backgroundColor: ink,
+        backgroundColor: Color(0xFF9A6B3E),
         foregroundColor: Colors.white,
+      ),
+      navigationBarTheme: const NavigationBarThemeData(
+        backgroundColor: Color(0xFFFFF7EE),
+        indicatorColor: Color(0xFFF6DCC5),
+        surfaceTintColor: Colors.transparent,
+        labelTextStyle: WidgetStatePropertyAll(
+          TextStyle(color: Color(0xFF5C4632), fontSize: 12),
+        ),
+        iconTheme: WidgetStatePropertyAll(
+          IconThemeData(color: Color(0xFF5C4632)),
+        ),
       ),
     );
   }
