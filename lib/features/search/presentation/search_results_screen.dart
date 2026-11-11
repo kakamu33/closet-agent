@@ -271,12 +271,13 @@ class _ItemResults extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (items.isEmpty)
+    if (items.isEmpty) {
       return const EmptyState(
         icon: Icons.search_off,
         title: '未找到衣物',
         message: '试试更换关键词。',
       );
+    }
     return GridView.builder(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -332,12 +333,13 @@ class _OutfitResults extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (outfits.isEmpty)
+    if (outfits.isEmpty) {
       return const EmptyState(
         icon: Icons.search_off,
         title: '未找到搭配',
         message: '试试更换关键词。',
       );
+    }
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
       itemCount: outfits.length,

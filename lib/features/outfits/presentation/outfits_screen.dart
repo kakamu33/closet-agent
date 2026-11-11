@@ -228,7 +228,7 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
                               return visible.isEmpty ||
                                   outfit.tags.any(visible.contains);
                             }).toList();
-                            if (all.isEmpty)
+                            if (all.isEmpty) {
                               return EmptyState(
                                 icon: Icons.auto_awesome_rounded,
                                 title: '收藏你的第一套搭配',
@@ -244,12 +244,14 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
                                   label: const Text('创建搭配'),
                                 ),
                               );
-                            if (shown.isEmpty)
+                            }
+                            if (shown.isEmpty) {
                               return const EmptyState(
                                 icon: Icons.filter_alt_off,
                                 title: '没有符合条件的搭配',
                                 message: '试试更换关键词或标签。',
                               );
+                            }
                             return ListView.separated(
                               padding: const EdgeInsets.fromLTRB(
                                 20,
@@ -389,11 +391,12 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
       ),
     );
     if (confirmed == true) {
-      if (_primaryId == tag.id)
+      if (_primaryId == tag.id) {
         setState(() {
           _primaryId = null;
           _detailId = null;
         });
+      }
       if (_detailId == tag.id) setState(() => _detailId = null);
       try {
         await ref.read(outfitTagsProvider.notifier).remove(tag.id);
@@ -448,7 +451,7 @@ class _TagBar extends StatelessWidget {
   final ReorderCallback onReorder;
   @override
   Widget build(BuildContext context) {
-    if (editing || tags.isNotEmpty)
+    if (editing || tags.isNotEmpty) {
       return SizedBox(
         height: 44,
         child: Row(
@@ -510,6 +513,7 @@ class _TagBar extends StatelessWidget {
           ],
         ),
       );
+    }
     return SizedBox(
       height: 44,
       child: ListView(

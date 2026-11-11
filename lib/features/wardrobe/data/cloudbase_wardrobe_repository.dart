@@ -1,4 +1,5 @@
 import '../../../core/cloudbase/cloudbase_client.dart';
+import '../../../core/cloudbase/json_fields.dart';
 import '../../../core/time_utils.dart';
 import '../../auth/domain/auth_user.dart';
 import '../domain/wardrobe_item.dart';
@@ -39,19 +40,15 @@ class CloudBaseWardrobeRepository {
   }
 
   Future<List<WardrobeItem>> fetchItems({required String accessToken}) async {
-    final response = await _client.request(
-      'GET',
+    final response = await _client.fetchAll(
       '/v1/rdb/rest/wardrobe_items',
       accessToken: accessToken,
-      queryParameters: const {
+      query: const {
         'select': '*',
         'deleted_at': 'is.null',
-        'order': 'updated_at.desc',
+        'order': 'updated_at.desc,id.asc',
       },
     );
-    if (response is! List) {
-      throw const CloudBaseException('云端衣物数据格式不正确');
-    }
     return response.map((value) {
       if (value is! Map) {
         throw const CloudBaseException('云端衣物数据格式不正确');
@@ -102,18 +99,14 @@ class CloudBaseWardrobeRepository {
   );
 
   Future<List<WardrobeTag>> fetchTags({required String accessToken}) async {
-    final response = await _client.request(
-      'GET',
+    final response = await _client.fetchAll(
       '/v1/rdb/rest/wardrobe_tags',
       accessToken: accessToken,
-      queryParameters: const {
+      query: const {
         'select': '*',
-        'order': 'parent_id.asc,sort_order.asc,name.asc',
+        'order': 'parent_id.asc,sort_order.asc,name.asc,id.asc',
       },
     );
-    if (response is! List) {
-      throw const CloudBaseException('云端标签数据格式不正确');
-    }
     return response.map((value) {
       if (value is! Map) {
         throw const CloudBaseException('云端标签数据格式不正确');
@@ -213,8 +206,5 @@ class CloudBaseWardrobeRepository {
     return result;
   }
 
-  List<String> _stringList(Object? value) {
-    if (value is! List) return const [];
-    return value.whereType<String>().toList();
-  }
+  List<String> _stringList(Object? value) => jsonStringArray(value);
 }

@@ -2,6 +2,7 @@ import 'auth_user.dart';
 
 abstract interface class AuthRepository {
   Future<AuthUser?> currentUser();
+  Future<String?> currentAccessToken();
 
   /// 仅保存最近使用的用户名或邮箱，绝不保存密码。
   Future<String?> lastLoginIdentifier();

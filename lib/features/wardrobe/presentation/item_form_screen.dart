@@ -4,6 +4,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/providers.dart';
+import '../../../core/media/image_draft.dart';
 import '../../../core/widgets/cutout_wand_button.dart';
 import '../../../core/widgets/item_image.dart';
 import '../data/background_removal_service.dart';
@@ -30,16 +31,22 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
   late String _currency = widget.item?.currency ?? 'CNY';
   late final List<String> _photos = [...?widget.item?.imagePaths];
   late final Set<String> _tagIds = {...?widget.item?.tagIds};
-  static const _poofApiKey = String.fromEnvironment(
-    'POOF_BG_API_KEY',
-    defaultValue: 'pk_38daea1bef2a8e956be2c362544bcf5c',
-  );
+  late final String _itemId = widget.item?.id ?? const Uuid().v4();
   var _saving = false;
   var _showNameError = false;
   final Set<String> _removingBackground = {};
 
+  late final ImageDraft _imageDraft;
+
+  @override
+  void initState() {
+    super.initState();
+    _imageDraft = ImageDraft(delete: ref.read(imageStoreProvider).delete);
+  }
+
   @override
   void dispose() {
+    _imageDraft.close();
     _name.dispose();
     _brand.dispose();
     _color.dispose();
@@ -49,11 +56,17 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
   }
 
   Future<void> _addPhotos() async {
-    final picked = await ImagePicker()
-        .pickMultiImage(imageQuality: 75, maxWidth: 1280);
+    final picked = await ImagePicker().pickMultiImage(
+      imageQuality: 75,
+      maxWidth: 1280,
+    );
     if (picked.isEmpty) return;
-    final photos =
-        await Future.wait(picked.map(ref.read(imageStoreProvider).persist));
+    final photos = await Future.wait(
+      picked.map(ref.read(imageStoreProvider).persist),
+    );
+    for (final path in photos) {
+      _imageDraft.track(path);
+    }
     if (mounted) setState(() => _photos.addAll(photos));
   }
 
@@ -79,21 +92,17 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
   }
 
   Future<void> _removeBackground(String photo) async {
-    if (_poofApiKey.isEmpty) {
-      _showMessage('未配置 Poof API Key。');
-      return;
-    }
     setState(() => _removingBackground.add(photo));
     try {
       final transparentImage = await ref
           .read(backgroundRemovalServiceProvider)
-          .removeBackground(imagePath: photo, apiKey: _poofApiKey);
+          .removeBackground(imagePath: photo);
+      _imageDraft.track(transparentImage);
       if (!mounted) return;
       setState(() {
         final index = _photos.indexOf(photo);
         if (index >= 0) _photos[index] = transparentImage;
       });
-      await ref.read(imageStoreProvider).delete(photo);
       _showMessage('已移除背景，透明 PNG 将随单品一起保存。');
     } on BackgroundRemovalException catch (error) {
       if (mounted) _showMessage(error.message);
@@ -117,15 +126,17 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
       // 检查数量限制
       final tag = allTags.firstWhere((t) => t.id == id);
       if (tag.isPrimary) {
-        final primaryCount =
-            allTags.where((t) => t.isPrimary && _tagIds.contains(t.id)).length;
+        final primaryCount = allTags
+            .where((t) => t.isPrimary && _tagIds.contains(t.id))
+            .length;
         if (primaryCount >= WardrobeTag.maxPrimaryTagCount) {
           _showMessage('一级标签最多 ${WardrobeTag.maxPrimaryTagCount} 个');
           return;
         }
       } else {
-        final secondaryCount =
-            allTags.where((t) => !t.isPrimary && _tagIds.contains(t.id)).length;
+        final secondaryCount = allTags
+            .where((t) => !t.isPrimary && _tagIds.contains(t.id))
+            .length;
         if (secondaryCount >= WardrobeTag.maxSecondaryTagCount) {
           _showMessage('二级标签最多 ${WardrobeTag.maxSecondaryTagCount} 个');
           return;
@@ -147,10 +158,10 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
     setState(() => _saving = true);
     try {
       final item = WardrobeItem(
-        id: widget.item?.id ?? const Uuid().v4(),
+        id: _itemId,
         name: _name.text.trim(),
         tagIds: _tagIds.toList(),
-        imagePaths: _photos,
+        imagePaths: List.of(_photos),
         brand: _brand.text.trim(),
         color: _color.text.trim(),
         notes: _notes.text.trim(),
@@ -159,7 +170,9 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
         createdAt: widget.item?.createdAt ?? DateTime.now(),
         updatedAt: DateTime.now(),
       );
+      _imageDraft.preserve(item.imagePaths);
       await ref.read(wardrobeItemsProvider.notifier).save(item);
+      _imageDraft.commit(item.imagePaths);
       if (mounted) Navigator.pop(context, item);
     } catch (_) {
       if (mounted) _showMessage('保存失败，请稍后重试。');
@@ -234,11 +247,10 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
                               child: IconButton(
                                 tooltip: '删除照片',
                                 padding: EdgeInsets.zero,
-                                constraints:
-                                    const BoxConstraints.tightFor(
-                                      width: 28,
-                                      height: 28,
-                                    ),
+                                constraints: const BoxConstraints.tightFor(
+                                  width: 28,
+                                  height: 28,
+                                ),
                                 visualDensity: VisualDensity.compact,
                                 icon: const Icon(Icons.close, size: 19),
                                 onPressed: () =>
@@ -271,8 +283,9 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
                   ? AutovalidateMode.always
                   : AutovalidateMode.onUserInteraction,
               onChanged: (value) {
-                if (_showNameError && value.trim().isNotEmpty)
+                if (_showNameError && value.trim().isNotEmpty) {
                   setState(() => _showNameError = false);
+                }
               },
               decoration: const InputDecoration(
                 labelText: '名称 *',
@@ -331,15 +344,16 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
                 Expanded(
                   child: TextFormField(
                     controller: _price,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     decoration: const InputDecoration(hintText: '输入金额'),
                     validator: (value) =>
                         value == null ||
-                                value.trim().isEmpty ||
-                                double.tryParse(value.trim()) != null
-                            ? null
-                            : '请输入有效金额',
+                            value.trim().isEmpty ||
+                            double.tryParse(value.trim()) != null
+                        ? null
+                        : '请输入有效金额',
                   ),
                 ),
               ],
@@ -361,8 +375,8 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
                   _saving
                       ? '保存中…'
                       : widget.item == null
-                          ? '保存单品'
-                          : '保存修改',
+                      ? '保存单品'
+                      : '保存修改',
                 ),
               ),
             ),
@@ -425,8 +439,8 @@ class _AccordionTagSelectorState extends State<_AccordionTagSelector> {
       '一级 $primarySelected/${WardrobeTag.maxPrimaryTagCount}  '
       '二级 $secondarySelected/${WardrobeTag.maxSecondaryTagCount}',
       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-          ),
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
     );
   }
 
@@ -454,22 +468,21 @@ class _AccordionTagSelectorState extends State<_AccordionTagSelector> {
               Expanded(
                 child: Text(
                   primary.name,
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
                 ),
               ),
               if (children.isNotEmpty)
                 IconButton(
                   icon: Icon(
-                    isExpanded
-                        ? Icons.expand_less
-                        : Icons.expand_more,
+                    isExpanded ? Icons.expand_less : Icons.expand_more,
                   ),
-                  onPressed: () =>
-                      setState(() => _expanded.contains(primary.id)
-                          ? _expanded.remove(primary.id)
-                          : _expanded.add(primary.id)),
+                  onPressed: () => setState(
+                    () => _expanded.contains(primary.id)
+                        ? _expanded.remove(primary.id)
+                        : _expanded.add(primary.id),
+                  ),
                   visualDensity: VisualDensity.compact,
                 ),
             ],
@@ -496,4 +509,3 @@ class _AccordionTagSelectorState extends State<_AccordionTagSelector> {
     );
   }
 }
-

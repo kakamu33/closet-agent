@@ -10,19 +10,115 @@ import '../../features/wardrobe/domain/wardrobe_canvas_region.dart';
 import '../../features/wardrobe/domain/wardrobe_item.dart';
 import '../../features/wardrobe/domain/wardrobe_tag.dart';
 import '../time_utils.dart';
+import '../sync/sync_collection.dart';
 import 'database_factory.dart';
 
-class AppDatabase {
-  AppDatabase({Database? database}) : _database = database;
+class AppDatabase implements SyncJournal {
+  // Keep the injected database parameter public for adapters and tests.
+  // ignore: prefer_initializing_formals
+  AppDatabase({Database? database, this.userId}) : _database = database;
+
+  final String? userId;
+  Future<Database>? _opening;
 
   Database? _database;
-  Future<Database> get instance async => _database ??= await _open();
+  Future<Database> get instance async {
+    if (_database != null) return _database!;
+    try {
+      return _database = await (_opening ??= _open());
+    } catch (_) {
+      _opening = null;
+      rethrow;
+    }
+  }
+
+  @override
+  Future<Map<String, Object?>?> readSyncState(String collection) async {
+    final rows = await (await instance).query(
+      'sync_state',
+      where: 'collection = ?',
+      whereArgs: [collection],
+    );
+    return rows.isEmpty
+        ? null
+        : Map<String, Object?>.from(
+            jsonDecode(rows.single['payload']! as String) as Map,
+          );
+  }
+
+  @override
+  Future<void> writeSyncState(
+    String collection,
+    Map<String, Object?> state,
+  ) async {
+    await (await instance).insert('sync_state', {
+      'collection': collection,
+      'payload': jsonEncode(state),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  /// Only called for the authenticated session restored from the old app.
+  /// Claiming records an owner before copying, so another account cannot import it.
+  Future<void> importLegacyData() async {
+    if (userId == null || await readSyncState('legacy_import') != null) return;
+    final legacy = AppDatabase();
+    if (!await databaseExists('${await getDatabasesPath()}/diexu.db')) {
+      await writeSyncState('legacy_import', {'done': true});
+      return;
+    }
+    final source = await legacy.instance;
+    try {
+      final owner = await legacy.readSyncState('legacy_owner');
+      if (owner != null && owner['userId'] != userId) return;
+      await legacy.writeSyncState('legacy_owner', {'userId': userId});
+      final target = await instance;
+      final tables = [
+        'wardrobe_items',
+        'wardrobe_tags',
+        'outfits',
+        'outfit_entries',
+        'outfit_tags',
+        'wardrobe_canvas_layouts',
+        'wardrobe_canvas_regions',
+        'wardrobe_canvas_preferences',
+        'user_profile',
+      ];
+      final snapshots = <String, List<Map<String, Object?>>>{};
+      for (final table in tables) {
+        snapshots[table] = await source.query(table);
+      }
+      await target.transaction((txn) async {
+        for (final table in tables) {
+          for (final row in snapshots[table]!) {
+            await txn.insert(
+              table,
+              row,
+              conflictAlgorithm: ConflictAlgorithm.ignore,
+            );
+          }
+        }
+        await txn.insert('sync_state', {
+          'collection': 'legacy_import',
+          'payload': '{"done":true}',
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      });
+    } finally {
+      await source.close();
+    }
+  }
+
+  Future<void> _createSyncTable(DatabaseExecutor db) => db.execute(
+    'CREATE TABLE IF NOT EXISTS sync_state(collection TEXT PRIMARY KEY, payload TEXT NOT NULL)',
+  );
 
   Future<Database> _open() => openAppDatabase(
-    'diexu.db',
-    version: 17,
+    userId == null
+        ? 'diexu.db'
+        : 'diexu_${base64Url.encode(utf8.encode(userId!))}.db',
+    version: 18,
     onConfigure: (db) async => db.execute('PRAGMA foreign_keys = ON'),
     onCreate: (db, version) async {
+      await _createSyncTable(db);
       await _createCoreTables(db);
       await _createTagTables(db);
       await _createProfileTable(db);
@@ -30,10 +126,13 @@ class AppDatabase {
       await _createCanvasLayoutTable(db);
       await _createCanvasPreferenceTable(db);
       await _createCanvasRegionTable(db);
-      await _seedTags(db);
-      await _seedOutfitTags(db);
+      if (userId == null) {
+        await _seedTags(db);
+        await _seedOutfitTags(db);
+      }
     },
     onUpgrade: (db, oldVersion, newVersion) async {
+      if (oldVersion < 18) await _createSyncTable(db);
       if (oldVersion < 2) {
         await db.execute(
           'ALTER TABLE wardrobe_items ADD COLUMN image_paths_json TEXT',
@@ -120,10 +219,7 @@ class AppDatabase {
   /// 列本身不需要 `ALTER COLUMN TYPE`，只需要把已有的字符串值转换成数字
   /// 即可就地生效。
   Future<void> _migrateTimestampColumns(Database db) async {
-    for (final spec in const [
-      ('wardrobe_items', 'id'),
-      ('outfits', 'id'),
-    ]) {
+    for (final spec in const [('wardrobe_items', 'id'), ('outfits', 'id')]) {
       final (table, idColumn) = spec;
       final rows = await db.query(
         table,
@@ -185,6 +281,7 @@ class AppDatabase {
   /// SQLite 老版本不支持 `ALTER TABLE ... DROP COLUMN`，因此用
   /// “新建表 -> 拷贝数据 -> 替换旧表”的方式重建 `wardrobe_items`。
   Future<void> _dropCategoryColumn(Database db) async {
+    final layouts = await db.query('wardrobe_canvas_layouts');
     await db.execute('''CREATE TABLE wardrobe_items_new(
       id TEXT PRIMARY KEY, name TEXT NOT NULL,
       image_path TEXT, image_paths_json TEXT, tag_ids_json TEXT,
@@ -197,6 +294,13 @@ class AppDatabase {
       FROM wardrobe_items''');
     await db.execute('DROP TABLE wardrobe_items');
     await db.execute('ALTER TABLE wardrobe_items_new RENAME TO wardrobe_items');
+    for (final layout in layouts) {
+      await db.insert(
+        'wardrobe_canvas_layouts',
+        layout,
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+    }
   }
 
   Future<void> _createCoreTables(Database db) async {
@@ -286,12 +390,7 @@ class AppDatabase {
 
   Future<UserProfile> profile() async {
     final db = await instance;
-    final row = await db.query(
-      'user_profile',
-      where: 'id = ?',
-      whereArgs: [UserProfile.defaults.id],
-      limit: 1,
-    );
+    final row = await db.query('user_profile', orderBy: 'rowid DESC', limit: 1);
     if (row.isEmpty) {
       await db.insert('user_profile', UserProfile.defaults.toMap());
       return UserProfile.defaults;
@@ -304,6 +403,7 @@ class AppDatabase {
     final db = await instance;
     await db.transaction((txn) async {
       for (final table in const [
+        'sync_state',
         'outfit_entries',
         'outfits',
         'wardrobe_canvas_layouts',
@@ -319,12 +419,12 @@ class AppDatabase {
     });
   }
 
-  Future<void> saveProfile(UserProfile profile) async =>
-      (await instance).insert(
-        'user_profile',
-        profile.toMap(),
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+  Future<void> saveProfile(UserProfile profile) async {
+    await (await instance).transaction((txn) async {
+      await txn.delete('user_profile');
+      await txn.insert('user_profile', profile.toMap());
+    });
+  }
 
   Future<List<WardrobeItem>> items() async => (await (await instance).query(
     'wardrobe_items',
@@ -335,20 +435,41 @@ class AppDatabase {
   Future<void> replaceItems(List<WardrobeItem> items) async {
     final db = await instance;
     await db.transaction((txn) async {
-      await txn.delete('wardrobe_canvas_layouts');
-      await txn.update('outfit_entries', {'item_id': null});
-      await txn.delete('wardrobe_items');
+      final ids = items.map((item) => item.id).toSet();
+      final previous = await txn.query('wardrobe_items', columns: ['id']);
+      for (final row in previous) {
+        if (!ids.contains(row['id'])) {
+          await txn.update(
+            'outfit_entries',
+            {'item_id': null},
+            where: 'item_id = ?',
+            whereArgs: [row['id']],
+          );
+          await txn.delete(
+            'wardrobe_items',
+            where: 'id = ?',
+            whereArgs: [row['id']],
+          );
+        }
+      }
       for (final item in items) {
-        await txn.insert('wardrobe_items', item.toMap());
+        await _upsertItem(txn, item);
       }
     });
   }
 
-  Future<void> saveItem(WardrobeItem item) async => (await instance).insert(
-    'wardrobe_items',
-    item.toMap(),
-    conflictAlgorithm: ConflictAlgorithm.replace,
-  );
+  Future<void> _upsertItem(DatabaseExecutor db, WardrobeItem item) async {
+    final updated = await db.update(
+      'wardrobe_items',
+      item.toMap(),
+      where: 'id = ?',
+      whereArgs: [item.id],
+    );
+    if (updated == 0) await db.insert('wardrobe_items', item.toMap());
+  }
+
+  Future<void> saveItem(WardrobeItem item) async =>
+      _upsertItem(await instance, item);
 
   Future<void> deleteItem(String id) async {
     final db = await instance;
@@ -415,7 +536,6 @@ class AppDatabase {
 
   Future<List<WardrobeTag>> tags() async {
     final db = await instance;
-    await _seedTags(db);
     return (await db.query(
       'wardrobe_tags',
       orderBy: 'parent_id IS NOT NULL, sort_order, name',
@@ -488,7 +608,6 @@ class AppDatabase {
 
   Future<List<WardrobeTag>> outfitTags() async {
     final db = await instance;
-    await _seedOutfitTags(db);
     return (await db.query(
       'outfit_tags',
       orderBy: 'parent_id IS NOT NULL, sort_order, name',
@@ -546,13 +665,14 @@ class AppDatabase {
         final retained = ids
             .where((tagId) => !removed.contains(tagId))
             .toList();
-        if (ids.length != retained.length)
+        if (ids.length != retained.length) {
           await txn.update(
             'outfits',
             {'tags_json': jsonEncode(retained)},
             where: 'id = ?',
             whereArgs: [row['id']],
           );
+        }
       }
     });
   }
@@ -661,8 +781,9 @@ class AppDatabase {
 
   List<String> _coverPaths(Map<String, Object?> row) {
     final raw = row['cover_paths_json'] as String?;
-    if (raw != null && raw.isNotEmpty)
+    if (raw != null && raw.isNotEmpty) {
       return (jsonDecode(raw) as List).cast<String>();
+    }
     return <String>[if (row['cover_path'] case final String path) path];
   }
 

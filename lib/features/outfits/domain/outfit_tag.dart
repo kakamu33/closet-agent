@@ -30,4 +30,3 @@ const defaultOutfitTags = <WardrobeTag>[
     sortOrder: 3,
   ),
 ];
-

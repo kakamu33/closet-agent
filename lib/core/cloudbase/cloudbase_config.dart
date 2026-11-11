@@ -14,7 +14,9 @@ class CloudBaseConfig {
     return value == null || value.trim().isEmpty ? null : value.trim();
   }
 
+  static String get mediaBucket =>
+      dotenv.env['CLOUDBASE_MEDIA_BUCKET']?.trim() ?? '';
+
   static String get baseUrl =>
       'https://$environmentId.api.tcloudbasegateway.com';
 }
-

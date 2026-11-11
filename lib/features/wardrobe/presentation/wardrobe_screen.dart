@@ -253,7 +253,7 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
                                       true,
                                 )
                                 .toList();
-                            if (items.isEmpty)
+                            if (items.isEmpty) {
                               return EmptyState(
                                 icon: Icons.checkroom_outlined,
                                 title: '从第一件心爱单品开始',
@@ -269,12 +269,14 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
                                   label: const Text('录入单品'),
                                 ),
                               );
-                            if (filtered.isEmpty)
+                            }
+                            if (filtered.isEmpty) {
                               return const EmptyState(
                                 icon: Icons.search_off,
                                 title: '没有找到单品',
                                 message: '试试更换关键词或标签。',
                               );
+                            }
                             return GridView.builder(
                               padding: const EdgeInsets.fromLTRB(
                                 16,
@@ -492,11 +494,12 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
       ),
     );
     if (confirmed == true) {
-      if (_primaryId == tag.id)
+      if (_primaryId == tag.id) {
         setState(() {
           _primaryId = null;
           _detailId = null;
         });
+      }
       if (_detailId == tag.id) setState(() => _detailId = null);
       try {
         await ref.read(wardrobeTagsProvider.notifier).remove(tag.id);
@@ -554,7 +557,7 @@ class _TagRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (editing || tags.isNotEmpty)
+    if (editing || tags.isNotEmpty) {
       return SizedBox(
         height: 48,
         child: Row(
@@ -616,6 +619,7 @@ class _TagRow extends StatelessWidget {
           ],
         ),
       );
+    }
     return SizedBox(
       height: 48,
       child: ListView(

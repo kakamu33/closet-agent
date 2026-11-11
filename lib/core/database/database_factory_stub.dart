@@ -13,4 +13,3 @@ Future<Database> openAppDatabase(
   onCreate: onCreate,
   onUpgrade: onUpgrade,
 );
-

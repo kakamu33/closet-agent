@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/providers.dart';
-import '../../settings/domain/user_profile.dart';
 import '../domain/auth_repository.dart';
 
 enum _AuthMode { login, register, reset }
@@ -78,7 +77,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
   }
 
   Future<void> _restoreLastLoginIdentifier() async {
-    final identifier = await ref.read(authRepositoryProvider).lastLoginIdentifier();
+    final identifier = await ref
+        .read(authRepositoryProvider)
+        .lastLoginIdentifier();
     if (mounted && identifier != null) _identifier.text = identifier;
   }
 
@@ -160,7 +161,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
           }
           return;
         }
-        final user = await auth.register(
+        await auth.register(
           username: _username.text,
           nickname: _nickname.text,
           email: _email.text,
@@ -168,15 +169,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
           verificationId: verificationId,
           verificationCode: _verificationCode.text,
         );
-        await ref
-            .read(userProfileProvider.notifier)
-            .save(
-              UserProfile(
-                id: user.id,
-                nickname: user.nickname,
-                signature: UserProfile.defaults.signature,
-              ),
-            );
       } else {
         await ref
             .read(authRepositoryProvider)
@@ -259,41 +251,42 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
                     if (_mode == _AuthMode.login) ...[
                       Column(
                         children: [
-                      TextFormField(
-                        controller: _identifier,
-                        focusNode: _identifierFocus,
-                        textInputAction: TextInputAction.next,
-                        onChanged: (_) {
-                          if (_identifierValidated) {
-                            _formKey.currentState?.validate();
-                          }
-                        },
-                        decoration: const InputDecoration(
-                          hintText: '用户名或邮箱',
-                          floatingLabelBehavior: FloatingLabelBehavior.never,
-                          contentPadding: EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 14,
+                          TextFormField(
+                            controller: _identifier,
+                            focusNode: _identifierFocus,
+                            textInputAction: TextInputAction.next,
+                            onChanged: (_) {
+                              if (_identifierValidated) {
+                                _formKey.currentState?.validate();
+                              }
+                            },
+                            decoration: const InputDecoration(
+                              hintText: '用户名或邮箱',
+                              floatingLabelBehavior:
+                                  FloatingLabelBehavior.never,
+                              contentPadding: EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 14,
+                              ),
+                              prefixIcon: Icon(Icons.person_outline),
+                              errorMaxLines: 3,
+                            ),
+                            validator: (value) => _identifierValidated
+                                ? _validateLoginIdentifier(value)
+                                : null,
+                            errorBuilder: _buildShakingErrorText,
                           ),
-                          prefixIcon: Icon(Icons.person_outline),
-                          errorMaxLines: 3,
-                        ),
-                        validator: (value) => _identifierValidated
-                            ? _validateLoginIdentifier(value)
-                            : null,
-                        errorBuilder: _buildShakingErrorText,
-                      ),
-                      const SizedBox(height: 26),
-                      _passwordField(colors),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: TextButton(
-                          onPressed: _submitting
-                              ? null
-                              : () => _switchMode(_AuthMode.reset),
-                          child: const Text('忘记密码？'),
-                        ),
-                      ),
+                          const SizedBox(height: 26),
+                          _passwordField(colors),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton(
+                              onPressed: _submitting
+                                  ? null
+                                  : () => _switchMode(_AuthMode.reset),
+                              child: const Text('忘记密码？'),
+                            ),
+                          ),
                         ],
                       ),
                     ],
@@ -408,7 +401,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
                               Expanded(
                                 child: Text(
                                   _submitError!,
-                                  style: TextStyle(color: colors.onErrorContainer),
+                                  style: TextStyle(
+                                    color: colors.onErrorContainer,
+                                  ),
                                 ),
                               ),
                             ],
@@ -426,9 +421,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
                               ? '处理中…'
                               : switch (_mode) {
                                   _AuthMode.login => '登录',
-                                  _AuthMode.register => _registrationVerificationId == null
-                                      ? '发送邮箱验证码'
-                                      : '验证并创建账号',
+                                  _AuthMode.register =>
+                                    _registrationVerificationId == null
+                                        ? '发送邮箱验证码'
+                                        : '验证并创建账号',
                                   _AuthMode.reset => '发送找回说明',
                                 },
                         ),
@@ -495,9 +491,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
         ),
       ),
     ),
-    validator: (value) => _passwordValidated && (value?.length ?? 0) < 8
-        ? '密码至少需要 8 位'
-        : null,
+    validator: (value) =>
+        _passwordValidated && (value?.length ?? 0) < 8 ? '密码至少需要 8 位' : null,
     errorBuilder: _buildShakingErrorText,
   );
 }

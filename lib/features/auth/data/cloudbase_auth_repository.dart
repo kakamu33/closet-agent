@@ -16,25 +16,49 @@ class CloudBaseAuthRepository implements AuthRepository {
   static const _lastLoginIdentifierKey =
       'diexu.cloudbase.auth.last_login_identifier.v1';
   static const _deviceIdKey = 'diexu.cloudbase.auth.device_id.v1';
-  static const _legacyCleanupKey = 'diexu.cloudbase.auth.legacy_cleanup.v1';
 
   final CloudBaseClient _client;
   final AuthStore _store;
 
+  Future<_CloudBaseSession?>? _refreshing;
+  int _sessionGeneration = 0;
+  bool _legacySecretsCleared = false;
+
   @override
   Future<AuthUser?> currentUser() async {
+    if (!_legacySecretsCleared) {
+      await _store.delete('diexu.auth.accounts.v1');
+      await _store.delete('diexu.auth.current_user_id.v1');
+      _legacySecretsCleared = true;
+    }
+    // Startup remains usable offline. Remote operations independently require
+    // a fresh access token and never treat a network outage as a logout.
+    return (await _readSession())?.user;
+  }
+
+  Future<_CloudBaseSession?> _validSession() async {
     final session = await _readSession();
     if (session == null) return null;
-    if (session.expiresAt.isAfter(DateTime.now().toUtc())) {
-      final user = await _loadCloudUser(session.user, session.accessToken);
-      if (user != session.user) {
-        await _store.write(
-          _sessionKey,
-          jsonEncode(session.copyWith(user: user).toJson()),
-        );
-      }
-      return user;
+    if (session.expiresAt.isAfter(
+      DateTime.now().toUtc().add(const Duration(seconds: 30)),
+    )) {
+      return session;
     }
+    if (_refreshing case final active?) return active;
+    final generation = _sessionGeneration;
+    final request = _refreshSession(session, generation);
+    _refreshing = request;
+    try {
+      return await request;
+    } finally {
+      if (identical(_refreshing, request)) _refreshing = null;
+    }
+  }
+
+  Future<_CloudBaseSession?> _refreshSession(
+    _CloudBaseSession session,
+    int generation,
+  ) async {
     try {
       final response = await _client.requestObject(
         'POST',
@@ -45,29 +69,17 @@ class CloudBaseAuthRepository implements AuthRepository {
         },
         extraHeaders: {'x-device-id': await _deviceId()},
       );
-      final accessToken = _requiredString(response, 'access_token');
-      final user = await _loadCloudUser(session.user, accessToken);
-      await _saveSession(response, user);
-      return user;
-    } on CloudBaseException {
-      await _store.delete(_sessionKey);
-      return null;
+      if (generation != _sessionGeneration) return null;
+      await _saveSession(response, session.user);
+      return _readSession();
+    } on CloudBaseException catch (error) {
+      if (generation == _sessionGeneration &&
+          (error.statusCode == 401 || error.message == 'invalid_grant')) {
+        await _store.delete(_sessionKey);
+        return null;
+      }
+      rethrow;
     }
-  }
-
-  /// 清除旧版本地认证原型遗留的数据，仅在首次云端迁移时执行一次。
-  Future<bool> clearLegacyLocalAuthArtifacts() async {
-    if (await _store.read(_legacyCleanupKey) == 'done') return false;
-    for (final key in const [
-      'diexu.auth.accounts.v1',
-      'diexu.auth.current_user_id.v1',
-      _lastLoginIdentifierKey,
-      _sessionKey,
-    ]) {
-      await _store.delete(key);
-    }
-    await _store.write(_legacyCleanupKey, 'done');
-    return true;
   }
 
   @override
@@ -139,9 +151,10 @@ class CloudBaseAuthRepository implements AuthRepository {
         createdAt: DateTime.now().toUtc(),
       );
       final accessToken = _requiredString(tokenResponse, 'access_token');
+      _sessionGeneration++;
+      await _saveSession(tokenResponse, user);
       await _ensureProfile(user, accessToken);
-      final cloudUser = await _loadCloudUser(user, accessToken);
-      await _saveSession(tokenResponse, cloudUser);
+      final cloudUser = user;
       await _store.write(_lastLoginIdentifierKey, normalizedUsername);
       return cloudUser;
     } on CloudBaseException catch (error) {
@@ -173,6 +186,7 @@ class CloudBaseAuthRepository implements AuthRepository {
         createdAt: DateTime.now().toUtc(),
       );
       final user = await _loadCloudUser(authenticatedUser, accessToken);
+      _sessionGeneration++;
       await _saveSession(response, user);
       await _store.write(_lastLoginIdentifierKey, normalizedIdentifier);
       return user;
@@ -197,14 +211,16 @@ class CloudBaseAuthRepository implements AuthRepository {
   }
 
   /// 供受 RLS 保护的 CloudBase 数据仓库使用；必要时会自动刷新会话。
-  Future<String?> currentAccessToken() async {
-    final user = await currentUser();
-    if (user == null) return null;
-    return (await _readSession())?.accessToken;
-  }
+  @override
+  Future<String?> currentAccessToken() async =>
+      (await _validSession())?.accessToken;
 
   @override
-  Future<void> logout() => _store.delete(_sessionKey);
+  Future<void> logout() async {
+    _sessionGeneration++;
+    _refreshing = null;
+    await _store.delete(_sessionKey);
+  }
 
   /// 永久注销当前账号：删除 CloudBase Auth 账号本身（`auth.users` 记录）
   /// 及其全部业务数据（衣物、标签、个人资料），不可恢复。
@@ -218,7 +234,7 @@ class CloudBaseAuthRepository implements AuthRepository {
   /// 管理员身份执行删除，杜绝越权删除他人账号的风险。
   @override
   Future<void> deleteAccount() async {
-    final session = await _readSession();
+    final session = await _validSession();
     if (session == null) {
       throw const AuthException('登录状态已失效，请重新登录后再试');
     }
@@ -237,14 +253,14 @@ class CloudBaseAuthRepository implements AuthRepository {
       if (result['success'] != true) {
         final detail = (result['detail'] as String?)?.trim();
         final message = (result['error'] as String?) ?? '注销失败，请稍后重试';
-        throw AuthException(detail?.isNotEmpty == true ? '$message：$detail' : message);
+        throw AuthException(
+          detail?.isNotEmpty == true ? '$message：$detail' : message,
+        );
       }
     } on CloudBaseException catch (error) {
       throw AuthException(_friendlyMessage(error));
-    } finally {
-      // 无论云端删除是否完全成功，都不应让用户停留在一个残缺的已登录状态。
-      await _store.delete(_sessionKey);
     }
+    await logout();
   }
 
   /// 每次建立或恢复会话都以云端资料为唯一来源，避免用户名登录和邮箱登录

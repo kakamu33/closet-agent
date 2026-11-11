@@ -4,6 +4,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../../core/providers.dart';
 import '../../../core/widgets/item_image.dart';
+import '../../../core/widgets/sync_status_tile.dart';
 import '../../auth/domain/auth_user.dart';
 import '../domain/user_profile.dart';
 
@@ -43,16 +44,10 @@ class SettingsScreen extends ConsumerWidget {
                   const ListTile(
                     leading: Icon(Icons.offline_bolt_outlined),
                     title: Text('离线可用'),
-                    subtitle: Text('数据与照片保存在本机，不依赖网络'),
+                    subtitle: Text('离线修改保留在本机，联网后自动重试同步'),
                   ),
                   const Divider(height: 1),
-                  ListTile(
-                    leading: const Icon(Icons.cloud_outlined),
-                    title: const Text('账号与云同步'),
-                    subtitle: const Text('将在后续版本开放'),
-                    trailing: const Chip(label: Text('即将推出')),
-                    onTap: () {},
-                  ),
+                  const SyncStatusTile(),
                   const Divider(height: 1),
                   ListTile(
                     leading: const Icon(Icons.people_outline),
@@ -71,7 +66,7 @@ class SettingsScreen extends ConsumerWidget {
                   const ListTile(
                     leading: Icon(Icons.shield_outlined),
                     title: Text('隐私与数据'),
-                    subtitle: Text('本地优先，私有内容默认不上传'),
+                    subtitle: Text('衣物与搭配同步到当前账号；抠图需上传照片'),
                   ),
                   const Divider(height: 1),
                   ListTile(
@@ -90,7 +85,7 @@ class SettingsScreen extends ConsumerWidget {
                   const ListTile(
                     leading: Icon(Icons.info_outline),
                     title: Text('关于叠序'),
-                    subtitle: Text('版本 1.0.0 · 本地 MVP'),
+                    subtitle: Text('版本 1.0.0'),
                   ),
                 ],
               ),

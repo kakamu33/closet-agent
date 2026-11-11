@@ -1,13 +1,13 @@
-import 'dart:html' as html;
+import '../../../core/database/browser_storage.dart';
 
 class AuthStore {
-  Future<String?> read(String key) async => html.window.localStorage[key];
+  Future<String?> read(String key) async => browserStorage[key];
 
   Future<void> write(String key, String value) async {
-    html.window.localStorage[key] = value;
+    browserStorage[key] = value;
   }
 
   Future<void> delete(String key) async {
-    html.window.localStorage.remove(key);
+    browserStorage.remove(key);
   }
 }

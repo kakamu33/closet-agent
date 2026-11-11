@@ -82,4 +82,3 @@ class _CutoutWandPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _CutoutWandPainter oldDelegate) => false;
 }
-

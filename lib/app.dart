@@ -13,6 +13,7 @@ class DiexuApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final session = ref.watch(authSessionProvider);
     return MaterialApp(
+      key: ValueKey(session.value?.id ?? 'signed-out'),
       title: '叠序',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,

@@ -44,7 +44,7 @@ const OWNED_TABLES = [
 exports.main = async (event, context) => {
   try {
     console.log('[deleteAccount] env:', { TCB_ENV, REGION, GATEWAY_HOST });
-    console.log('[deleteAccount] raw event:', JSON.stringify(event));
+    // Never log event: it contains the bearer token.
 
     const accessToken = extractAccessToken(event);
     console.log('[deleteAccount] accessToken length:', accessToken ? accessToken.length : null);
@@ -62,13 +62,10 @@ exports.main = async (event, context) => {
 
     return respond(200, { success: true, userId });
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    console.error('[deleteAccount] 执行失败:', error);
-    // 将数据库/网关的原始失败原因返回给受信任的已登录调用方，客户端据此可
-    // 明确提示出错表和约束，而不是只显示无法排查的“注销失败”。
+    console.error('[deleteAccount] 执行失败');
+    // Return a stable error without leaking internal schema or credentials.
     return respond(500, {
       error: '注销失败，请稍后重试',
-      detail,
     });
   }
 };
@@ -201,10 +198,7 @@ function probeTokenValidity(accessToken) {
  * 用管理员身份（`ExecutePGSql`，省略 Role 即以 `cloudbase_admin` 执行，
  * 具备 SUPERUSER + BYPASSRLS）依次删除业务数据与 Auth 账号本身。
  *
- * 每条 DELETE 独立执行——`ExecutePGSql` 每次调用只支持一条 SQL。
- *
- * 因此任意一步失败时，前面的删除已生效。循环中的表名被保留在异常中，便于
- * 通过云函数日志和客户端提示准确定位；不要把失败伪装成已成功注销。
+ * 所有 DELETE 在同一条 DO 语句内执行，任一步骤失败会整体回滚。
  */
 async function deleteAccountAndData(userId) {
   // 云函数运行时会自动把管理员临时密钥注入到这三个环境变量中，
@@ -218,28 +212,21 @@ async function deleteAccountAndData(userId) {
     region: REGION,
   });
 
-  const escapedUserId = userId.replace(/'/g, "''");
-
-  for (const table of OWNED_TABLES) {
-    try {
-      const sql = `DELETE FROM public.${table} WHERE user_id = '${escapedUserId}'`;
-      const result = await client.ExecutePGSql({ EnvId: TCB_ENV, Sql: sql });
-      console.log(`[deleteAccountAndData] ${table} ->`, JSON.stringify(result));
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`删除 ${table} 失败：${detail}`);
-    }
+  // One anonymous block is one PostgreSQL statement and one transaction.
+  // An exception rolls back every DELETE, including earlier tables.
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
+    throw new Error('Invalid user identifier');
   }
+  const deletes = OWNED_TABLES.map(table =>
+    `DELETE FROM public.${table} WHERE user_id = '${userId}';`).join('\n');
+  await client.ExecutePGSql({
+    EnvId: TCB_ENV,
+    Sql: `DO $delete_account$ BEGIN
+      ${deletes}
+      DELETE FROM auth.users WHERE id = '${userId}';
+    END $delete_account$;`,
+  });
 
-  // 最后删除 Auth 账号本身；一旦这一步完成，该 access token 会立即失效。
-  try {
-    const authSql = `DELETE FROM auth.users WHERE id = '${escapedUserId}'`;
-    const authResult = await client.ExecutePGSql({ EnvId: TCB_ENV, Sql: authSql });
-    console.log('[deleteAccountAndData] auth.users ->', JSON.stringify(authResult));
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`删除认证账号失败：${detail}`);
-  }
 }
 
 function respond(statusCode, payload) {
