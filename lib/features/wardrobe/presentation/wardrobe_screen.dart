@@ -20,10 +20,13 @@ class WardrobeScreen extends ConsumerStatefulWidget {
   ConsumerState<WardrobeScreen> createState() => _WardrobeScreenState();
 }
 
+enum _WardrobeSort { newest, oldest, name }
+
 class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
   String? _primaryId;
   String? _detailId;
   bool _editingTags = false;
+  _WardrobeSort _sort = _WardrobeSort.newest;
 
   @override
   void initState() {
@@ -63,6 +66,14 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
   Widget build(BuildContext context) {
     final tagState = ref.watch(wardrobeTagsProvider);
     final itemState = ref.watch(wardrobeItemsProvider);
+    // Hide the FAB only when the alternative recording CTA can be rendered.
+    final showsEmptyWardrobe =
+        tagState.asData != null &&
+        !tagState.isLoading &&
+        !tagState.hasError &&
+        itemState.asData?.value.isEmpty == true &&
+        !itemState.isLoading &&
+        !itemState.hasError;
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 18,
@@ -75,8 +86,8 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
               '衣橱',
               style: TextStyle(
                 fontFamily: 'LXGWWenKai',
-                fontSize: 23,
-                fontWeight: FontWeight.w700,
+                fontSize: 22,
+                fontWeight: FontWeight.w600,
                 color: Color(0xFF5C3A20),
                 letterSpacing: .4,
               ),
@@ -86,11 +97,14 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 8),
-            child: FilledButton.tonalIcon(
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFFFBE1C8),
-                foregroundColor: const Color(0xFF67482D),
-                elevation: 0,
+            child: TextButton.icon(
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFF6F6257),
+                minimumSize: const Size(48, 44),
+                textStyle: const TextStyle(fontSize: 13),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
               onPressed: () => Navigator.push(
                 context,
@@ -102,17 +116,18 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          _exitTagEditing();
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const ItemFormScreen()),
-          );
-        },
-        icon: const Icon(Icons.add),
-        label: const Text('录入'),
-      ),
+      floatingActionButton: showsEmptyWardrobe
+          ? null
+          : FloatingActionButton.extended(
+              heroTag: 'wardrobe-add',
+              onPressed: _openNewItem,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              icon: const Icon(Icons.add, size: 20),
+              label: const Text('录入', style: TextStyle(fontSize: 14)),
+            ),
       body: tagState.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) => Center(child: Text('标签加载失败：$error')),
@@ -124,14 +139,14 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
           return Column(
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(18, 2, 18, 12),
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 4),
                 child: Container(
-                  height: 40,
+                  height: 44,
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: .46),
-                    borderRadius: BorderRadius.circular(20),
+                    color: const Color(0xFFFCFBF8),
+                    borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                      color: const Color(0xFFDDD2C4),
+                      color: const Color(0xFFE5E0D9),
                       width: 1,
                     ),
                   ),
@@ -153,21 +168,22 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
                         isDense: true,
                         prefixIcon: Icon(
                           Icons.search_rounded,
-                          color: Color(0xFFA39A90),
+                          color: Color(0xFF796F65),
                           size: 18,
                         ),
                         prefixIconConstraints: BoxConstraints(
                           minWidth: 40,
-                          minHeight: 40,
+                          minHeight: 44,
                         ),
                         hintText: '搜索名称、标签、颜色',
                         hintStyle: TextStyle(
                           fontFamily: 'SourceHanSansCN',
                           fontSize: 14,
-                          color: Color(0xFFA39A90),
+                          color: Color(0xFF796F65),
                         ),
                         contentPadding: EdgeInsets.symmetric(vertical: 11),
                       ),
+                      readOnly: true,
                       onTap: () {
                         _exitTagEditing();
                         _openSearch('');
@@ -197,7 +213,6 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
                 onReorder: (oldIndex, newIndex) =>
                     _reorderTags(primary, oldIndex, newIndex),
               ),
-              const SizedBox(height: 8),
               Expanded(
                 child: GestureDetector(
                   behavior: HitTestBehavior.translucent,
@@ -256,123 +271,271 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
                             if (items.isEmpty) {
                               return EmptyState(
                                 icon: Icons.checkroom_outlined,
-                                title: '从第一件心爱单品开始',
-                                message: '照片、标签与搭配都只保存在你的设备中。',
+                                illustration: const _WardrobeIllustration(),
+                                title: '把第一件衣服放进衣橱',
+                                message: '拍照或从相册选择，建立你的单品记录。',
                                 action: FilledButton.icon(
-                                  onPressed: () => Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => const ItemFormScreen(),
+                                  onPressed: _openNewItem,
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: const Color(0xFF805A3B),
+                                    foregroundColor: Colors.white,
+                                    minimumSize: const Size(0, 48),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 20,
+                                      vertical: 12,
+                                    ),
+                                    textStyle: const TextStyle(fontSize: 14),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(16),
                                     ),
                                   ),
-                                  icon: const Icon(Icons.add),
-                                  label: const Text('录入单品'),
+                                  icon: const Icon(Icons.add, size: 18),
+                                  label: const Text('添加第一件衣物'),
                                 ),
                               );
                             }
                             if (filtered.isEmpty) {
                               return const EmptyState(
                                 icon: Icons.search_off,
-                                title: '没有找到单品',
-                                message: '试试更换关键词或标签。',
+                                title: '这个分类还没有衣物',
+                                message: '添加衣物时选择此分类，或切换分类查看。',
                               );
                             }
-                            return GridView.builder(
-                              padding: const EdgeInsets.fromLTRB(
-                                16,
-                                4,
-                                16,
-                                100,
-                              ),
-                              gridDelegate:
-                                  const SliverGridDelegateWithFixedCrossAxisCount(
-                                    crossAxisCount: 2,
-                                    mainAxisSpacing: 12,
-                                    crossAxisSpacing: 10,
-                                    childAspectRatio: 1.02,
+                            filtered.sort((a, b) {
+                              final result = switch (_sort) {
+                                _WardrobeSort.newest => b.createdAt.compareTo(
+                                  a.createdAt,
+                                ),
+                                _WardrobeSort.oldest => a.createdAt.compareTo(
+                                  b.createdAt,
+                                ),
+                                _WardrobeSort.name => a.name.compareTo(b.name),
+                              };
+                              return result == 0
+                                  ? a.id.compareTo(b.id)
+                                  : result;
+                            });
+                            return Column(
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    20,
+                                    0,
+                                    12,
+                                    4,
                                   ),
-                              itemCount: filtered.length,
-                              itemBuilder: (context, index) {
-                                final item = filtered[index];
-                                final tagNames = tags
-                                    .where(
-                                      (tag) => item.tagIds.contains(tag.id),
-                                    )
-                                    .map((tag) => tag.name)
-                                    .join(' · ');
-                                return Card(
-                                  color: Colors.transparent,
-                                  surfaceTintColor: Colors.transparent,
-                                  shadowColor: Colors.transparent,
-                                  clipBehavior: Clip.antiAlias,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(20),
-                                  ),
-                                  child: InkWell(
-                                    hoverColor: Colors.transparent,
-                                    splashColor: Colors.transparent,
-                                    highlightColor: Colors.transparent,
-                                    onTap: () {
-                                      _exitTagEditing();
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (_) =>
-                                              ItemDetailScreen(item: item),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          '共 ${filtered.length} 件',
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            color: Color(0xFF807B74),
+                                          ),
                                         ),
+                                      ),
+                                      PopupMenuButton<_WardrobeSort>(
+                                        tooltip: '排序',
+                                        position: PopupMenuPosition.under,
+                                        offset: const Offset(0, 4),
+                                        color: const Color(0xFFFCFBF8),
+                                        surfaceTintColor: Colors.transparent,
+                                        shadowColor: const Color(0x24000000),
+                                        elevation: 4,
+                                        constraints:
+                                            const BoxConstraints.tightFor(
+                                              width: 148,
+                                            ),
+                                        menuPadding: const EdgeInsets.symmetric(
+                                          vertical: 4,
+                                        ),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          side: const BorderSide(
+                                            color: Color(0xFFE7E2DA),
+                                          ),
+                                        ),
+                                        onSelected: (value) =>
+                                            setState(() => _sort = value),
+                                        itemBuilder: (_) => [
+                                          for (final value
+                                              in _WardrobeSort.values)
+                                            PopupMenuItem(
+                                              value: value,
+                                              height: 44,
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 14,
+                                                  ),
+                                              child: Row(
+                                                children: [
+                                                  Expanded(
+                                                    child: Text(
+                                                      _sortLabel(value),
+                                                      style: TextStyle(
+                                                        fontSize: 13,
+                                                        fontWeight:
+                                                            _sort == value
+                                                            ? FontWeight.w500
+                                                            : FontWeight.w400,
+                                                        color: const Color(
+                                                          0xFF514A42,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  if (_sort == value)
+                                                    const Icon(
+                                                      Icons.check_rounded,
+                                                      size: 16,
+                                                      color: Color(0xFF805A3B),
+                                                    ),
+                                                ],
+                                              ),
+                                            ),
+                                        ],
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 4,
+                                          ),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                _sortLabel(_sort),
+                                                style: const TextStyle(
+                                                  fontSize: 12,
+                                                  color: Color(0xFF68635D),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 4),
+                                              const Icon(
+                                                Icons
+                                                    .keyboard_arrow_down_rounded,
+                                                size: 16,
+                                                color: Color(0xFF807B74),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Expanded(
+                                  child: LayoutBuilder(
+                                    builder: (context, constraints) {
+                                      final columns = constraints.maxWidth < 280
+                                          ? 1
+                                          : (constraints.maxWidth / 200)
+                                                .floor()
+                                                .clamp(2, 6);
+                                      final cardWidth =
+                                          (constraints.maxWidth -
+                                              40 -
+                                              (columns - 1) * 12) /
+                                          columns;
+                                      // Square photos retain the original collection density.
+                                      final textScale = MediaQuery.textScalerOf(
+                                        context,
+                                      ).scale(1);
+                                      return GridView.builder(
+                                        padding: const EdgeInsets.fromLTRB(
+                                          20,
+                                          0,
+                                          20,
+                                          96,
+                                        ),
+                                        gridDelegate:
+                                            SliverGridDelegateWithFixedCrossAxisCount(
+                                              crossAxisCount: columns,
+                                              mainAxisSpacing: 20,
+                                              crossAxisSpacing: 12,
+                                              mainAxisExtent:
+                                                  cardWidth + 60 * textScale,
+                                            ),
+                                        itemCount: filtered.length,
+                                        itemBuilder: (context, index) {
+                                          final item = filtered[index];
+                                          final tagNames = tags
+                                              .where(
+                                                (tag) => item.tagIds.contains(
+                                                  tag.id,
+                                                ),
+                                              )
+                                              .map((tag) => tag.name)
+                                              .join(' · ');
+                                          return Material(
+                                            color: Colors.transparent,
+                                            child: InkWell(
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              onTap: () {
+                                                _exitTagEditing();
+                                                Navigator.push(
+                                                  context,
+                                                  MaterialPageRoute(
+                                                    builder: (_) =>
+                                                        ItemDetailScreen(
+                                                          item: item,
+                                                        ),
+                                                  ),
+                                                );
+                                              },
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  AspectRatio(
+                                                    aspectRatio: 1,
+                                                    child: ItemImage(
+                                                      path: item.imagePath,
+                                                      radius: 12,
+                                                      fit: BoxFit.cover,
+                                                      backgroundColor:
+                                                          Colors.white,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 10),
+                                                  Text(
+                                                    item.name,
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                      color: Color(0xFF2D2C29),
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 3),
+                                                  Text(
+                                                    tagNames.isEmpty
+                                                        ? '未分类'
+                                                        : tagNames,
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      fontSize: 12,
+                                                      color: Color(0xFF807B74),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          );
+                                        },
                                       );
                                     },
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Expanded(
-                                          child: SizedBox(
-                                            width: double.infinity,
-                                            child: ItemImage(
-                                              path: item.imagePath,
-                                              radius: 20,
-                                            ),
-                                          ),
-                                        ),
-                                        Padding(
-                                          padding: const EdgeInsets.fromLTRB(
-                                            12,
-                                            11,
-                                            12,
-                                            3,
-                                          ),
-                                          child: Text(
-                                            item.name,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.w600,
-                                              fontSize: 16,
-                                            ),
-                                          ),
-                                        ),
-                                        Padding(
-                                          padding: const EdgeInsets.fromLTRB(
-                                            12,
-                                            0,
-                                            12,
-                                            12,
-                                          ),
-                                          child: Text(
-                                            tagNames.isEmpty ? '未分类' : tagNames,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: Theme.of(
-                                              context,
-                                            ).textTheme.bodySmall,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
                                   ),
-                                );
-                              },
+                                ),
+                              ],
                             );
                           },
                         ),
@@ -385,6 +548,20 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
           );
         },
       ),
+    );
+  }
+
+  String _sortLabel(_WardrobeSort value) => switch (value) {
+    _WardrobeSort.newest => '最近添加',
+    _WardrobeSort.oldest => '最早添加',
+    _WardrobeSort.name => '名称排序',
+  };
+
+  void _openNewItem() {
+    _exitTagEditing();
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const ItemFormScreen()),
     );
   }
 
@@ -420,33 +597,11 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
   }
 
   Future<void> _editTag({WardrobeTag? tag, String? parentId}) async {
-    final text = TextEditingController(text: tag?.name ?? '');
     final name = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(tag == null ? '添加标签' : '编辑标签'),
-        content: TextField(
-          controller: text,
-          autofocus: true,
-          maxLength: WardrobeTag.maxNameLength,
-          decoration: InputDecoration(
-            hintText: '标签名称（最多 ${WardrobeTag.maxNameLength} 个字符）',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, text.text.trim()),
-            child: const Text('保存'),
-          ),
-        ],
-      ),
+      builder: (_) => _TagNameDialog(tag: tag),
     );
-    text.dispose();
-    if (name == null) return;
+    if (!mounted || name == null) return;
     if (name.isEmpty) {
       if (tag == null) return;
       await _deleteTag(tag);
@@ -458,6 +613,7 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
           .read(wardrobeTagsProvider.notifier)
           .save(
             WardrobeTag(
+              syncVersion: tag?.syncVersion ?? 0,
               id: tag?.id ?? const Uuid().v4(),
               name: name,
               parentId: tag?.parentId ?? parentId,
@@ -510,23 +666,135 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
   }
 }
 
+class _TagNameDialog extends StatefulWidget {
+  const _TagNameDialog({this.tag});
+
+  final WardrobeTag? tag;
+
+  @override
+  State<_TagNameDialog> createState() => _TagNameDialogState();
+}
+
+class _TagNameDialogState extends State<_TagNameDialog> {
+  late final _text = TextEditingController(text: widget.tag?.name ?? '');
+
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text(widget.tag == null ? '添加标签' : '编辑标签'),
+    content: TextField(
+      controller: _text,
+      autofocus: true,
+      maxLength: WardrobeTag.maxNameLength,
+      decoration: InputDecoration(
+        hintText: '标签名称（最多 ${WardrobeTag.maxNameLength} 个字符）',
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('取消'),
+      ),
+      FilledButton(
+        onPressed: () => Navigator.pop(context, _text.text.trim()),
+        child: const Text('保存'),
+      ),
+    ],
+  );
+}
+
 class _WardrobeLogo extends StatelessWidget {
   const _WardrobeLogo();
 
   @override
-  Widget build(BuildContext context) => Container(
-    width: 36,
-    height: 36,
-    decoration: const BoxDecoration(
-      color: Color(0xFFEFE6D7),
-      shape: BoxShape.circle,
-    ),
+  Widget build(BuildContext context) => SizedBox(
+    width: 30,
+    height: 30,
     child: const Icon(
       Icons.checkroom_rounded,
       color: Color(0xFF9A7546),
       size: 21,
     ),
   );
+}
+
+class _WardrobeIllustration extends StatelessWidget {
+  const _WardrobeIllustration();
+
+  @override
+  Widget build(BuildContext context) => const ExcludeSemantics(
+    child: SizedBox(
+      width: 84,
+      height: 72,
+      child: CustomPaint(painter: _WardrobeIllustrationPainter()),
+    ),
+  );
+}
+
+class _WardrobeIllustrationPainter extends CustomPainter {
+  const _WardrobeIllustrationPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.scale(size.width / 112, size.height / 96);
+    final stroke = Paint()
+      ..color = const Color(0xFF9A8672)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    final fill = Paint()..color = const Color(0xFFEDE5DA);
+    const cabinet = Rect.fromLTWH(12, 6, 88, 78);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(cabinet, const Radius.circular(4)),
+      Paint()..color = const Color(0xFFF1EBE2),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(cabinet, const Radius.circular(4)),
+      stroke,
+    );
+    canvas.drawLine(const Offset(22, 21), const Offset(90, 21), stroke);
+    // A shirt and folded knitwear, rather than another standalone hanger.
+    final shirt = Path()
+      ..moveTo(45, 31)
+      ..lineTo(39, 28)
+      ..lineTo(28, 36)
+      ..lineTo(33, 45)
+      ..lineTo(38, 42)
+      ..lineTo(38, 63)
+      ..lineTo(62, 63)
+      ..lineTo(62, 42)
+      ..lineTo(67, 45)
+      ..lineTo(72, 36)
+      ..lineTo(61, 28)
+      ..lineTo(55, 31)
+      ..quadraticBezierTo(50, 37, 45, 31)
+      ..close();
+    canvas.drawPath(shirt, fill);
+    canvas.drawPath(shirt, stroke);
+    canvas.drawLine(const Offset(50, 22), const Offset(50, 27), stroke);
+    canvas.drawLine(const Offset(22, 72), const Offset(90, 72), stroke);
+    final folded = RRect.fromRectAndRadius(
+      const Rect.fromLTWH(72, 60, 15, 6),
+      const Radius.circular(2),
+    );
+    canvas.drawRRect(folded, fill);
+    canvas.drawRRect(folded, stroke);
+    canvas.drawLine(const Offset(73, 69), const Offset(87, 69), stroke);
+    canvas.drawLine(const Offset(20, 84), const Offset(20, 90), stroke);
+    canvas.drawLine(const Offset(92, 84), const Offset(92, 90), stroke);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _WardrobeIllustrationPainter oldDelegate) =>
+      false;
 }
 
 class _TagRow extends StatelessWidget {
@@ -609,10 +877,15 @@ class _TagRow extends StatelessWidget {
               ignoring: editing,
               child: Opacity(
                 opacity: editing ? 0 : 1,
-                child: IconButton(
+                child: TextButton.icon(
                   onPressed: onAdd,
-                  icon: const Icon(Icons.add_circle_outline),
-                  tooltip: '添加标签',
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFF817A72),
+                    minimumSize: const Size(48, 44),
+                    textStyle: const TextStyle(fontSize: 13),
+                  ),
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('添加分类'),
                 ),
               ),
             ),
@@ -640,10 +913,15 @@ class _TagRow extends StatelessWidget {
               onDelete: () => onDelete(tag),
             ),
           ),
-          IconButton(
+          TextButton.icon(
             onPressed: onAdd,
-            icon: const Icon(Icons.add_circle_outline),
-            tooltip: '添加标签',
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFF817A72),
+              minimumSize: const Size(48, 44),
+              textStyle: const TextStyle(fontSize: 13),
+            ),
+            icon: const Icon(Icons.add, size: 16),
+            label: const Text('添加分类'),
           ),
         ],
       ),
@@ -883,21 +1161,23 @@ class _ManagedChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    const selectedBackground = Color(0xFFEAD0AD);
-    const unselectedBackground = Color(0xFFF1E9DD);
+    const selectedBackground = Color(0xFFEAE2D7);
+    const unselectedBackground = Color(0xFFF7F5F1);
     const selectedText = Color(0xFF5C3A20);
-    const unselectedText = Color(0xFF756B60);
+    const unselectedText = Color(0xFF77736D);
     final chip = Material(
       color: selected ? selectedBackground : unselectedBackground,
-      shape: const StadiumBorder(),
+      shape: vertical
+          ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))
+          : const StadiumBorder(),
       child: InkWell(
         onTap: onTap,
         onLongPress: onLongPress,
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(vertical ? 12 : 22),
         child: Padding(
           padding: EdgeInsets.symmetric(
             horizontal: vertical ? 6 : 14,
-            vertical: vertical ? 6 : 8,
+            vertical: 6,
           ),
           child: SizedBox(
             width: vertical ? double.infinity : null,

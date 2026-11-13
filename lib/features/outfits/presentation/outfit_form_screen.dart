@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/providers.dart';
 import '../../../core/media/image_draft.dart';
+import '../../../core/media/photo_picker.dart';
 import '../../../core/widgets/item_image.dart';
 import '../../wardrobe/domain/wardrobe_item.dart';
 import '../../wardrobe/presentation/item_detail_screen.dart';
@@ -51,18 +51,22 @@ class _OutfitFormScreenState extends ConsumerState<OutfitFormScreen> {
   }
 
   Future<void> _pickCover() async {
-    final images = await ImagePicker().pickMultiImage(
-      imageQuality: 75,
-      maxWidth: 1280,
-    );
-    if (images.isEmpty) return;
-    final paths = await Future.wait(
-      images.map(ref.read(imageStoreProvider).persist),
-    );
-    for (final path in paths) {
-      _imageDraft.track(path);
+    final images = await pickPhotos(context);
+    if (images.isEmpty || !mounted) return;
+    final store = ref.read(imageStoreProvider);
+    try {
+      for (final image in images) {
+        final path = await store.persist(image);
+        _imageDraft.track(path);
+        if (mounted) setState(() => _coverPaths.add(path));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('照片保存失败，请重试。')));
+      }
     }
-    if (mounted) setState(() => _coverPaths.addAll(paths));
   }
 
   Future<void> _addEntry(List<WardrobeItem> items) async {
@@ -85,6 +89,7 @@ class _OutfitFormScreenState extends ConsumerState<OutfitFormScreen> {
     setState(() => _saving = true);
     try {
       final outfit = Outfit(
+        syncVersion: widget.outfit?.syncVersion ?? 0,
         id: _outfitId,
         name: _name.text.trim(),
         // 保留旧字段以兼容已存在的数据；新的搭配仅使用标签分类。
@@ -152,7 +157,7 @@ class _OutfitFormScreenState extends ConsumerState<OutfitFormScreen> {
                   ),
                   OutlinedButton.icon(
                     onPressed: _pickCover,
-                    icon: const Icon(Icons.add_photo_alternate_outlined),
+                    icon: const Icon(Icons.photo_camera_outlined),
                     label: const Text('添加搭配照片'),
                   ),
                 ],

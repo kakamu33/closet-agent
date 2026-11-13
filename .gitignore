@@ -33,3 +33,6 @@ build/
 android/app/debug
 android/app/profile
 android/app/release
+
+# Isolated PostgreSQL test dependencies
+test/database/node_modules/

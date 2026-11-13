@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/providers.dart';
 import '../../../core/media/image_draft.dart';
+import '../../../core/media/photo_picker.dart';
 import '../../../core/widgets/cutout_wand_button.dart';
 import '../../../core/widgets/item_image.dart';
 import '../data/background_removal_service.dart';
@@ -56,18 +56,22 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
   }
 
   Future<void> _addPhotos() async {
-    final picked = await ImagePicker().pickMultiImage(
-      imageQuality: 75,
-      maxWidth: 1280,
-    );
-    if (picked.isEmpty) return;
-    final photos = await Future.wait(
-      picked.map(ref.read(imageStoreProvider).persist),
-    );
-    for (final path in photos) {
-      _imageDraft.track(path);
+    final picked = await pickPhotos(context);
+    if (picked.isEmpty || !mounted) return;
+    final store = ref.read(imageStoreProvider);
+    try {
+      for (final image in picked) {
+        final path = await store.persist(image);
+        _imageDraft.track(path);
+        if (mounted) setState(() => _photos.add(path));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('照片保存失败，请重试。')));
+      }
     }
-    if (mounted) setState(() => _photos.addAll(photos));
   }
 
   Future<void> _confirmRemoveBackground(String photo) async {
@@ -158,6 +162,7 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
     setState(() => _saving = true);
     try {
       final item = WardrobeItem(
+        syncVersion: widget.item?.syncVersion ?? 0,
         id: _itemId,
         name: _name.text.trim(),
         tagIds: _tagIds.toList(),
@@ -269,7 +274,7 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 6),
                       ),
                       onPressed: _addPhotos,
-                      icon: const Icon(Icons.add_a_photo_outlined),
+                      icon: const Icon(Icons.photo_camera_outlined),
                       label: const Text('添加照片'),
                     ),
                   ),
@@ -329,6 +334,7 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
                 SizedBox(
                   width: 132,
                   child: DropdownButtonFormField<String>(
+                    isExpanded: true,
                     initialValue: _currency,
                     decoration: const InputDecoration(hintText: '币种'),
                     items: const [

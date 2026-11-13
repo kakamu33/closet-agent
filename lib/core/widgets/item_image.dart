@@ -34,17 +34,25 @@ class ItemImage extends ConsumerWidget {
     this.width,
     this.height,
     this.radius = 18,
+    this.fit = BoxFit.cover,
+    this.padding = EdgeInsets.zero,
+    this.backgroundColor = const Color(0xFFEAE5DD),
   });
   final String? path;
   final double? size;
   final double? width;
   final double? height;
   final double radius;
+  final BoxFit fit;
+  final EdgeInsets padding;
+  final Color backgroundColor;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) => ClipRRect(
     borderRadius: BorderRadius.circular(radius),
-    child: SizedBox(
+    child: Container(
+      color: backgroundColor,
+      padding: padding,
       width: width ?? size,
       height: height ?? size,
       child: path == null
@@ -54,7 +62,7 @@ class ItemImage extends ConsumerWidget {
                 .when(
                   data: (bytes) => Image.memory(
                     bytes,
-                    fit: BoxFit.cover,
+                    fit: fit,
                     cacheWidth: 800,
                     errorBuilder: (_, _, _) =>
                         _placeholder(Icons.broken_image_outlined),
@@ -65,7 +73,7 @@ class ItemImage extends ConsumerWidget {
     ),
   );
   Widget _placeholder(IconData icon) => ColoredBox(
-    color: const Color(0xFFEAE5DD),
+    color: backgroundColor,
     child: Icon(icon, color: Colors.brown.shade300, size: 34),
   );
 }

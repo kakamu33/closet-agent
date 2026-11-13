@@ -38,6 +38,8 @@ const OWNED_TABLES = [
   'wardrobe_tags',
   'outfits',
   'outfit_tags',
+  'closet_sync_receipts',
+  'closet_sync_entities',
   'user_profiles',
 ];
 

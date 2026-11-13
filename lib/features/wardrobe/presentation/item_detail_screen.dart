@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:intl/intl.dart';
+import '../../../core/widgets/detail_layout.dart';
 
 import '../../../core/providers.dart';
-import '../../../core/widgets/cutout_wand_button.dart';
+import '../../../core/widgets/detail_photo_gallery.dart';
 import '../../../core/widgets/item_image.dart';
 import '../../outfits/presentation/outfit_detail_screen.dart';
 import '../data/background_removal_service.dart';
@@ -77,6 +77,12 @@ class _ItemDetailScreenState extends ConsumerState<ItemDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final latest = ref
+        .watch(wardrobeItemsProvider)
+        .value
+        ?.where((item) => item.id == _item.id)
+        .firstOrNull;
+    if (latest != null) _item = latest;
     final related = ref.watch(itemOutfitsProvider(_item.id));
     final allTags = ref.watch(wardrobeTagsProvider).value ?? const [];
     final tagNames = _item.tagIds
@@ -90,19 +96,22 @@ class _ItemDetailScreenState extends ConsumerState<ItemDetailScreen> {
         .toList();
     final brand = _item.brand?.trim().isNotEmpty == true
         ? _item.brand!.trim()
-        : '未知';
+        : null;
     final color = _item.color?.trim().isNotEmpty == true
         ? _item.color!.trim()
-        : '未知';
-    final timestamp = DateFormat('y.M.d HH:mm:ss');
+        : null;
     final price = _item.price == null
         ? null
         : '${_item.currency} ${_item.price!.toStringAsFixed(_item.price! % 1 == 0 ? 0 : 2)}';
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: const Color(0xFFF7F5F1),
+        surfaceTintColor: Colors.transparent,
+        scrolledUnderElevation: 0,
         actions: [
           IconButton(
-            icon: const Icon(Icons.edit_outlined),
+            tooltip: '编辑单品',
+            icon: const Icon(Icons.edit_outlined, size: 20),
             onPressed: () async {
               final updated = await Navigator.push<WardrobeItem>(
                 context,
@@ -111,9 +120,21 @@ class _ItemDetailScreenState extends ConsumerState<ItemDetailScreen> {
               if (updated != null && mounted) setState(() => _item = updated);
             },
           ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline),
-            onPressed: () async {
+          PopupMenuButton<String>(
+            tooltip: '更多操作',
+            icon: const Icon(Icons.more_horiz, size: 22),
+            color: const Color(0xFFFCFBF8),
+            surfaceTintColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: 'delete',
+                child: Text('删除单品', style: TextStyle(fontSize: 14)),
+              ),
+            ],
+            onSelected: (_) async {
               final confirmed = await showDialog<bool>(
                 context: context,
                 builder: (context) => AlertDialog(
@@ -132,8 +153,14 @@ class _ItemDetailScreenState extends ConsumerState<ItemDetailScreen> {
                 ),
               );
               if (confirmed == true) {
-                await ref.read(wardrobeItemsProvider.notifier).remove(_item.id);
-                if (context.mounted) Navigator.pop(context);
+                try {
+                  await ref
+                      .read(wardrobeItemsProvider.notifier)
+                      .remove(_item.id);
+                  if (context.mounted) Navigator.pop(context);
+                } catch (_) {
+                  if (mounted) _showMessage('删除失败，请重试');
+                }
               }
             },
           ),
@@ -142,81 +169,61 @@ class _ItemDetailScreenState extends ConsumerState<ItemDetailScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 32),
         children: [
-          _ItemPhotoCarousel(
+          DetailPhotoGallery(
             paths: _item.imagePaths,
-            removingPath: _removingPath,
+            processingPath: _removingPath,
             onRemoveBackground: _confirmRemoveBackground,
           ),
-          const SizedBox(height: 22),
-          Text(
-            _item.name,
-            style: Theme.of(
-              context,
-            ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w600),
+          DetailHeading(
+            title: _item.name,
+            category: tagNames.join(' · '),
+            kind: '单品档案',
           ),
-          const SizedBox(height: 8),
-          Text(
-            '品牌：$brand   ·    $color',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
+          if (brand != null || color != null || price != null)
+            DetailFacts(
+              values: [
+                if (brand != null) ('品牌', brand),
+                if (color != null) ('颜色', color),
+                if (price != null) ('购入价格', price),
+              ],
             ),
-          ),
-          if (price != null) ...[
-            const SizedBox(height: 6),
+          if (_item.notes?.trim().isNotEmpty == true) ...[
+            const DetailSectionTitle(title: '单品笔记'),
             Text(
-              '价格：$price',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
+              _item.notes!.trim(),
+              style: const TextStyle(fontSize: 14, height: 1.7),
             ),
           ],
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: tagNames.map((name) => Chip(label: Text(name))).toList(),
+          DetailSectionTitle(
+            title: '相关搭配',
+            annotation: related.asData == null
+                ? null
+                : '${related.asData!.value.length} 套',
           ),
-          const SizedBox(height: 24),
-          Text('备注', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 10),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceContainerLowest,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Text(
-              _item.notes?.trim().isNotEmpty == true
-                  ? _item.notes!.trim()
-                  : '暂无说明',
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                color: _item.notes?.trim().isNotEmpty == true
-                    ? null
-                    : Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-          const SizedBox(height: 32),
-          Text('相关搭配', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 12),
           related.when(
             data: (outfits) => outfits.isEmpty
-                ? const Text('还没有使用这件单品的搭配。')
+                ? const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 12),
+                    child: Text(
+                      '还没有使用这件单品的搭配',
+                      style: TextStyle(fontSize: 13, color: Color(0xFF807B74)),
+                    ),
+                  )
                 : Column(
                     children: outfits
                         .map(
-                          (outfit) => Card(
-                            clipBehavior: Clip.antiAlias,
+                          (outfit) => Material(
+                            color: const Color(0xFFFCFBF8),
                             shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14),
+                              borderRadius: BorderRadius.circular(10),
                             ),
+                            clipBehavior: Clip.antiAlias,
                             child: ListTile(
                               contentPadding: const EdgeInsets.fromLTRB(
-                                10,
-                                7,
+                                12,
                                 8,
-                                7,
+                                12,
+                                8,
                               ),
                               hoverColor: Colors.transparent,
                               splashColor: Colors.transparent,
@@ -231,7 +238,7 @@ class _ItemDetailScreenState extends ConsumerState<ItemDetailScreen> {
                                             context,
                                           ).colorScheme.surfaceContainerHighest,
                                           child: const Icon(
-                                            Icons.auto_awesome_outlined,
+                                            Icons.view_quilt_outlined,
                                             size: 23,
                                           ),
                                         )
@@ -243,8 +250,20 @@ class _ItemDetailScreenState extends ConsumerState<ItemDetailScreen> {
                                         ),
                                 ),
                               ),
-                              title: Text(outfit.name),
-                              subtitle: Text('${outfit.entries.length}件单品'),
+                              title: Text(
+                                outfit.name,
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              subtitle: Text(
+                                '${outfit.entries.length} 件单品',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFF807B74),
+                                ),
+                              ),
                               trailing: const Icon(Icons.chevron_right),
                               onTap: () => Navigator.push(
                                 context,
@@ -261,110 +280,9 @@ class _ItemDetailScreenState extends ConsumerState<ItemDetailScreen> {
             loading: () => const LinearProgressIndicator(),
             error: (error, _) => Text('加载失败：$error'),
           ),
-          const SizedBox(height: 28),
-          Text(
-            '创建于 ${timestamp.format(_item.createdAt.toLocal())}\n更新于 ${timestamp.format(_item.updatedAt.toLocal())}',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
+          DetailRecordTime(created: _item.createdAt, updated: _item.updatedAt),
         ],
       ),
     );
   }
-}
-
-class _ItemPhotoCarousel extends StatefulWidget {
-  const _ItemPhotoCarousel({
-    required this.paths,
-    required this.removingPath,
-    required this.onRemoveBackground,
-  });
-  final List<String> paths;
-  final String? removingPath;
-  final ValueChanged<String> onRemoveBackground;
-
-  @override
-  State<_ItemPhotoCarousel> createState() => _ItemPhotoCarouselState();
-}
-
-class _ItemPhotoCarouselState extends State<_ItemPhotoCarousel> {
-  var _currentPage = 0;
-
-  @override
-  Widget build(BuildContext context) {
-    final currentPath = widget.paths.isEmpty
-        ? null
-        : widget.paths[_currentPage.clamp(0, widget.paths.length - 1)];
-    final processing =
-        currentPath != null && currentPath == widget.removingPath;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(28),
-      child: SizedBox(
-        height: 300,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            PageView(
-              onPageChanged: (page) => setState(() => _currentPage = page),
-              children: widget.paths.isEmpty
-                  ? [ItemImage(path: null, radius: 0)]
-                  : widget.paths
-                        .map((path) => ItemImage(path: path, radius: 0))
-                        .toList(),
-            ),
-            if (processing)
-              const ColoredBox(
-                color: Color(0x66000000),
-                child: Center(
-                  child: CircularProgressIndicator(color: Colors.white),
-                ),
-              ),
-            if (currentPath != null && !processing)
-              Positioned(
-                left: 14,
-                bottom: 14,
-                child: CutoutWandButton(
-                  onTap: () => widget.onRemoveBackground(currentPath),
-                ),
-              ),
-            if (widget.paths.length > 1)
-              Positioned(
-                right: 12,
-                bottom: 12,
-                child: _PhotoPageIndicator(
-                  currentPage: _currentPage,
-                  total: widget.paths.length,
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PhotoPageIndicator extends StatelessWidget {
-  const _PhotoPageIndicator({required this.currentPage, required this.total});
-  final int currentPage;
-  final int total;
-
-  @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: BoxDecoration(
-      color: Colors.black54,
-      borderRadius: BorderRadius.circular(14),
-    ),
-    child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-      child: Text(
-        '${currentPage + 1}/$total',
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 12,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
-    ),
-  );
 }

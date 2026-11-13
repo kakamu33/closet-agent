@@ -1,24 +1,44 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:image_picker/image_picker.dart';
 
 import '../../../core/providers.dart';
+import '../../../core/media/photo_picker.dart';
 import '../../../core/widgets/item_image.dart';
 import '../../../core/widgets/sync_status_tile.dart';
 import '../../auth/domain/auth_user.dart';
 import '../domain/user_profile.dart';
+
+final _legacyImportAvailableProvider = FutureProvider<bool>((ref) async {
+  if (ref.watch(authSessionProvider).value == null) return false;
+  return ref.watch(databaseProvider).hasLegacyDataForImport();
+});
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final itemCount = ref.watch(wardrobeItemsProvider).value?.length ?? 0;
-    final outfitCount = ref.watch(outfitsProvider).value?.length ?? 0;
+    final itemCount = ref.watch(wardrobeItemsProvider).value?.length;
+    final outfitCount = ref.watch(outfitsProvider).value?.length;
     final profile = ref.watch(userProfileProvider);
     final account = ref.watch(authSessionProvider).asData?.value;
+    final canImport = ref.watch(_legacyImportAvailableProvider).value == true;
     return Scaffold(
-      appBar: AppBar(title: const Text('个人')),
+      appBar: AppBar(
+        titleSpacing: 20,
+        backgroundColor: const Color(0xFFF7F5F1),
+        surfaceTintColor: Colors.transparent,
+        scrolledUnderElevation: 0,
+        title: const Text(
+          '个人',
+          style: TextStyle(
+            fontFamily: 'LXGWWenKai',
+            fontSize: 22,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF5C3A20),
+          ),
+        ),
+      ),
       body: profile.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) => Center(child: Text('个人资料加载失败：$error')),
@@ -38,57 +58,58 @@ class SettingsScreen extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 20),
-            Card(
-              child: Column(
-                children: [
-                  const ListTile(
-                    leading: Icon(Icons.offline_bolt_outlined),
-                    title: Text('离线可用'),
-                    subtitle: Text('离线修改保留在本机，联网后自动重试同步'),
-                  ),
-                  const Divider(height: 1),
-                  const SyncStatusTile(),
-                  const Divider(height: 1),
-                  ListTile(
-                    leading: const Icon(Icons.people_outline),
-                    title: const Text('好友与搭配社区'),
-                    subtitle: const Text('分享前始终由你确认'),
-                    trailing: const Chip(label: Text('即将推出')),
-                    onTap: () {},
-                  ),
-                ],
-              ),
-            ),
+            const Divider(height: 1, color: Color(0xFFE5E0D9)),
+            const SyncStatusTile(),
+            const Divider(height: 1, color: Color(0xFFE5E0D9)),
             const SizedBox(height: 20),
-            Card(
-              child: Column(
-                children: [
-                  const ListTile(
-                    leading: Icon(Icons.shield_outlined),
-                    title: Text('隐私与数据'),
-                    subtitle: Text('衣物与搭配同步到当前账号；抠图需上传照片'),
+            _SettingsGroup(
+              children: [
+                if (canImport)
+                  _SettingsRow(
+                    title: '导入旧设备数据',
+                    onTap: () => _importLegacy(context, ref),
                   ),
-                  const Divider(height: 1),
-                  ListTile(
-                    leading: const Icon(Icons.settings_outlined),
-                    title: const Text('设置'),
-                    subtitle: const Text('账号、通知、展示与偏好设置'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const _SettingsDetailScreen(),
-                      ),
+                _SettingsRow(
+                  title: '账号与安全',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const _SettingsDetailScreen(),
                     ),
                   ),
-                  const Divider(height: 1),
-                  const ListTile(
-                    leading: Icon(Icons.info_outline),
-                    title: Text('关于叠序'),
-                    subtitle: Text('版本 1.0.0'),
-                  ),
-                ],
-              ),
+                ),
+                _SettingsRow(
+                  title: '隐私与数据',
+                  onTap: () => _openInfo(context, '隐私与数据', const [
+                    ('衣物与搭配', '单品、搭配和分类会同步到当前账号。未完成同步的修改保留在本机，可在个人页查看状态并重试。'),
+                    (
+                      '照片与抠图',
+                      '图片云存储可用时，单品和搭配照片会随数据上传；未能上传时保留在本机。使用抠图功能需要将照片上传至抠图服务处理。',
+                    ),
+                    ('仅在此设备保存', '个人头像、昵称、签名和线上衣柜的布局保存在此设备，不会随衣物与搭配一起同步。'),
+                    (
+                      '删除账号',
+                      '可在“账号与安全”中注销账号。注销会永久删除账号及关联数据，无法恢复；请先确认没有需要保留的内容。',
+                    ),
+                  ]),
+                ),
+                _SettingsRow(
+                  title: '使用帮助',
+                  onTap: () => _openInfo(context, '使用帮助', const [
+                    ('整理衣橱', '在衣橱页添加衣物，填写名称并选择分类。长按分类可进入编辑和拖动排序模式。'),
+                    ('保存搭配', '在搭配页创建搭配，组合已有单品，也可以手动填写其他单品。AI 帮我搭配尚未开放。'),
+                    ('线上衣柜', '把衣物放在可以拖动、分区的白板上，按自己的收纳习惯整理。布局仅保存在当前设备。'),
+                    ('同步遇到问题', '保留当前设备的数据，联网后点击同步按钮重试。照片未上传时，请勿清除浏览器数据或卸载应用。'),
+                  ]),
+                ),
+                _SettingsRow(
+                  title: '关于叠序',
+                  onTap: () => _openInfo(context, '关于叠序', const [
+                    ('叠序', '整理已有衣物，记录喜欢的搭配。'),
+                    ('当前版本', '1.0.0'),
+                  ]),
+                ),
+              ],
             ),
           ],
         ),
@@ -104,7 +125,7 @@ class _SettingsDetailScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final account = ref.watch(authSessionProvider).asData?.value;
     return Scaffold(
-      appBar: AppBar(title: const Text('设置')),
+      appBar: AppBar(title: const Text('账号与安全')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
         children: [
@@ -138,24 +159,20 @@ class _ProfileHeader extends StatelessWidget {
   });
   final UserProfile profile;
   final String? username;
-  final int itemCount;
-  final int outfitCount;
+  final int? itemCount;
+  final int? outfitCount;
   final VoidCallback onEdit;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(20),
-    decoration: BoxDecoration(
-      color: const Color(0xFF282722),
-      borderRadius: BorderRadius.circular(28),
-    ),
-    child: Stack(
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: 8),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _ProfileAvatar(path: profile.avatarPath, size: 68),
-            const SizedBox(width: 16),
+            _ProfileAvatar(path: profile.avatarPath, size: 48),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -165,47 +182,122 @@ class _ProfileHeader extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 21,
+                      fontSize: 18,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
-                  const SizedBox(height: 3),
+                  const SizedBox(height: 4),
                   Text(
-                    username == null ? 'ID: ${profile.id}' : '@$username',
-                    style: const TextStyle(color: Colors.white60),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    profile.signature,
-                    maxLines: 2,
+                    username == null ? '本机个人资料' : '@$username',
+                    maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white70, height: 1.3),
-                  ),
-                  const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      _ProfileStat(value: '$itemCount', label: '件单品'),
-                      const SizedBox(width: 26),
-                      _ProfileStat(value: '$outfitCount', label: '套搭配'),
-                    ],
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF807B74),
+                    ),
                   ),
                 ],
               ),
             ),
+            TextButton(
+              onPressed: onEdit,
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFF71675E),
+                textStyle: const TextStyle(fontSize: 12),
+              ),
+              child: const Text('编辑资料 ›'),
+            ),
           ],
         ),
-        Positioned(
-          top: -8,
-          right: -8,
-          child: IconButton(
-            tooltip: '编辑个人资料',
-            onPressed: onEdit,
-            icon: const Icon(Icons.edit_outlined, color: Colors.white),
-          ),
+        const SizedBox(height: 20),
+        Text(
+          '${itemCount ?? '—'} 件单品 · ${outfitCount ?? '—'} 套搭配',
+          style: const TextStyle(fontSize: 13, color: Color(0xFF71675E)),
         ),
       ],
     ),
+  );
+}
+
+void _openInfo(
+  BuildContext context,
+  String title,
+  List<(String, String)> sections,
+) {
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => Scaffold(
+        appBar: AppBar(title: Text(title)),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+          children: [
+            for (final section in sections)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      section.$1,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      section.$2,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        height: 1.7,
+                        color: Color(0xFF71675E),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+class _SettingsGroup extends StatelessWidget {
+  const _SettingsGroup({required this.children});
+  final List<Widget> children;
+  @override
+  Widget build(BuildContext context) => Material(
+    color: Colors.transparent,
+    child: Column(
+      children: [
+        for (var i = 0; i < children.length; i++) ...[
+          if (i > 0) const Divider(height: 1, color: Color(0xFFEAE5DE)),
+          children[i],
+        ],
+      ],
+    ),
+  );
+}
+
+class _SettingsRow extends StatelessWidget {
+  const _SettingsRow({required this.title, required this.onTap});
+  final String title;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) => ListTile(
+    contentPadding: EdgeInsets.zero,
+    title: Text(
+      title,
+      style: const TextStyle(fontSize: 14, color: Color(0xFF2D2C29)),
+    ),
+    trailing: const Icon(
+      Icons.chevron_right_rounded,
+      size: 18,
+      color: Color(0xFFABA298),
+    ),
+    onTap: onTap,
   );
 }
 
@@ -220,9 +312,14 @@ class _AccountCard extends StatelessWidget {
       children: [
         ListTile(
           leading: const Icon(Icons.verified_user_outlined),
-          title: Text('账号：${account.username}'),
-          subtitle: Text('已绑定邮箱：${account.email}'),
-          trailing: const Chip(label: Text('本地测试')),
+          title: Text(
+            account.username,
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+          ),
+          subtitle: Text(
+            '${account.email}\n${account.emailVerified ? '邮箱已验证' : '邮箱未验证'}',
+            style: const TextStyle(fontSize: 12, height: 1.6),
+          ),
         ),
       ],
     ),
@@ -235,7 +332,7 @@ class _LogoutCard extends ConsumerWidget {
     child: ListTile(
       leading: const Icon(Icons.logout_outlined),
       title: const Text('退出登录'),
-      subtitle: const Text('衣橱数据仍保留在本机'),
+      subtitle: const Text('下次使用需要重新登录'),
       onTap: () async {
         final confirmed = await showDialog<bool>(
           context: context,
@@ -394,7 +491,21 @@ class _ProfileEditScreenState extends ConsumerState<_ProfileEditScreen> {
   late final _signature = TextEditingController(text: widget.profile.signature);
   late String? _avatarPath = widget.profile.avatarPath;
   var _saving = false;
+  var _allowPop = false;
+  var _confirming = false;
+  bool get _dirty =>
+      _nickname.text != widget.profile.nickname ||
+      _signature.text != widget.profile.signature ||
+      _avatarPath != widget.profile.avatarPath;
 
+  @override
+  void initState() {
+    super.initState();
+    _nickname.addListener(_changed);
+    _signature.addListener(_changed);
+  }
+
+  void _changed() => setState(() {});
   @override
   void dispose() {
     _nickname.dispose();
@@ -402,19 +513,63 @@ class _ProfileEditScreenState extends ConsumerState<_ProfileEditScreen> {
     super.dispose();
   }
 
-  Future<void> _pickAvatar() async {
-    final image = await ImagePicker().pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 80,
-      maxWidth: 512,
+  Future<void> _close() async {
+    setState(() => _allowPop = true);
+    await WidgetsBinding.instance.endOfFrame;
+    if (mounted) Navigator.pop(context);
+  }
+
+  Future<void> _requestLeave() async {
+    if (_saving || _confirming) return;
+    if (!_dirty) {
+      await _close();
+      return;
+    }
+    _confirming = true;
+    final discard = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('放弃本次修改？'),
+        content: const Text('修改尚未保存。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('继续编辑'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('放弃修改'),
+          ),
+        ],
+      ),
     );
-    if (image == null) return;
-    final path = await ref.read(imageStoreProvider).persist(image);
-    if (mounted) setState(() => _avatarPath = path);
+    _confirming = false;
+    if (discard == true && mounted) await _close();
+  }
+
+  Future<void> _pickAvatar() async {
+    try {
+      final images = await pickPhotos(
+        context,
+        multiple: false,
+        imageQuality: 80,
+        maxWidth: 512,
+      );
+      if (images.isEmpty || !mounted) return;
+      final path = await ref.read(imageStoreProvider).persist(images.single);
+      if (mounted) setState(() => _avatarPath = path);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('头像读取失败，请重试')));
+      }
+    }
   }
 
   Future<void> _save() async {
-    if (!_formKey.currentState!.validate()) return;
+    if (_saving || !_dirty || !_formKey.currentState!.validate()) return;
+    FocusScope.of(context).unfocus();
     setState(() => _saving = true);
     try {
       await ref
@@ -427,69 +582,173 @@ class _ProfileEditScreenState extends ConsumerState<_ProfileEditScreen> {
               avatarPath: _avatarPath,
             ),
           );
-      if (mounted) Navigator.pop(context);
+      if (mounted) await _close();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('资料保存失败，请重试')));
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('编辑个人资料')),
-    body: Form(
-      key: _formKey,
-      child: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          Center(
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                _ProfileAvatar(path: _avatarPath, size: 104),
-                Positioned(
-                  right: -4,
-                  bottom: -4,
-                  child: IconButton.filled(
-                    onPressed: _pickAvatar,
-                    icon: const Icon(Icons.camera_alt_outlined),
-                    tooltip: '更换头像',
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 32),
-          TextFormField(
-            controller: _nickname,
-            maxLength: 20,
-            decoration: const InputDecoration(labelText: '昵称'),
-            validator: (value) =>
-                value == null || value.trim().isEmpty ? '请输入昵称' : null,
-          ),
-          const SizedBox(height: 14),
-          TextFormField(
-            initialValue: 'ID: ${widget.profile.id}',
-            enabled: false,
-            decoration: const InputDecoration(labelText: '唯一 ID（不可修改）'),
-          ),
-          const SizedBox(height: 14),
-          TextFormField(
-            controller: _signature,
-            maxLength: 60,
-            maxLines: 3,
-            decoration: const InputDecoration(labelText: '个性签名'),
-          ),
-          const SizedBox(height: 28),
-          FilledButton(
-            onPressed: _saving ? null : _save,
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Text(_saving ? '保存中…' : '保存资料'),
+  Widget build(BuildContext context) => PopScope(
+    canPop: _allowPop || (!_dirty && !_saving),
+    onPopInvokedWithResult: (didPop, _) {
+      if (!didPop) _requestLeave();
+    },
+    child: Scaffold(
+      appBar: AppBar(
+        backgroundColor: const Color(0xFFF7F5F1),
+        surfaceTintColor: Colors.transparent,
+        scrolledUnderElevation: 0,
+        leading: BackButton(onPressed: _saving ? null : _requestLeave),
+        title: const Text(
+          '编辑资料',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500),
+        ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: TextButton(
+              onPressed: _dirty && !_saving ? _save : null,
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFF805A3B),
+              ),
+              child: Text(_saving ? '保存中…' : '保存'),
             ),
           ),
         ],
       ),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+          children: [
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: _saving ? null : _pickAvatar,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Row(
+                    children: [
+                      _ProfileAvatar(path: _avatarPath, size: 48),
+                      const SizedBox(width: 16),
+                      const Expanded(
+                        child: Text(
+                          '更换头像',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Color(0xFF71675E),
+                          ),
+                        ),
+                      ),
+                      const Icon(
+                        Icons.photo_camera_outlined,
+                        size: 18,
+                        color: Color(0xFFABA298),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
+            _ProfileField(
+              label: '昵称',
+              controller: _nickname,
+              maxLength: 20,
+              enabled: !_saving,
+              validator: (value) =>
+                  value == null || value.trim().isEmpty ? '请输入昵称' : null,
+            ),
+            const SizedBox(height: 24),
+            _ProfileField(
+              label: '个性签名',
+              controller: _signature,
+              maxLength: 60,
+              lines: 2,
+              enabled: !_saving,
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              '个人资料仅保存在当前设备',
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.5,
+                color: Color(0xFF918A82),
+              ),
+            ),
+          ],
+        ),
+      ),
     ),
+  );
+}
+
+class _ProfileField extends StatelessWidget {
+  const _ProfileField({
+    required this.label,
+    required this.controller,
+    required this.maxLength,
+    required this.enabled,
+    this.lines = 1,
+    this.validator,
+  });
+  final String label;
+  final TextEditingController controller;
+  final int maxLength;
+  final int lines;
+  final bool enabled;
+  final String? Function(String?)? validator;
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        label,
+        style: const TextStyle(fontSize: 12, color: Color(0xFF807B74)),
+      ),
+      const SizedBox(height: 4),
+      TextFormField(
+        controller: controller,
+        enabled: enabled,
+        maxLength: maxLength,
+        minLines: lines,
+        maxLines: lines,
+        validator: validator,
+        style: const TextStyle(
+          fontSize: 15,
+          height: 1.6,
+          color: Color(0xFF2D2C29),
+        ),
+        textInputAction: lines == 1
+            ? TextInputAction.next
+            : TextInputAction.newline,
+        decoration: InputDecoration(
+          filled: false,
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(vertical: 10),
+          border: const UnderlineInputBorder(
+            borderSide: BorderSide(color: Color(0xFFE5E0D9)),
+          ),
+          enabledBorder: const UnderlineInputBorder(
+            borderSide: BorderSide(color: Color(0xFFE5E0D9)),
+          ),
+          focusedBorder: const UnderlineInputBorder(
+            borderSide: BorderSide(color: Color(0xFF9A8672)),
+          ),
+          disabledBorder: const UnderlineInputBorder(
+            borderSide: BorderSide(color: Color(0xFFE5E0D9)),
+          ),
+          counterStyle: const TextStyle(fontSize: 11, color: Color(0xFF918A82)),
+        ),
+      ),
+    ],
   );
 }
 
@@ -517,23 +776,48 @@ class _ProfileAvatar extends StatelessWidget {
   );
 }
 
-class _ProfileStat extends StatelessWidget {
-  const _ProfileStat({required this.value, required this.label});
-  final String value;
-  final String label;
-  @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(
-        value,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 21,
-          fontWeight: FontWeight.bold,
-        ),
+Future<void> _importLegacy(BuildContext context, WidgetRef ref) async {
+  final database = ref.read(databaseProvider);
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('导入到当前账号？'),
+      content: const Text(
+        '旧版本数据没有可靠的账号归属。请仅在确认这些衣物和搭配属于你时导入；原始旧数据会保留。已有云端同名或同 ID 内容不会被直接覆盖。',
       ),
-      Text(label, style: const TextStyle(color: Colors.white60, fontSize: 12)),
-    ],
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('取消'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('确认是我的数据，导入'),
+        ),
+      ],
+    ),
   );
+  if (confirmed != true ||
+      !context.mounted ||
+      !identical(database, ref.read(databaseProvider))) {
+    return;
+  }
+  try {
+    await database.importLegacyData(confirmed: true);
+    if (!context.mounted) return;
+    ref.invalidate(_legacyImportAvailableProvider);
+    ref.invalidate(wardrobeItemsProvider);
+    ref.invalidate(outfitsProvider);
+    ref.invalidate(wardrobeTagsProvider);
+    ref.invalidate(outfitTagsProvider);
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('旧数据已导入，待同步内容会保留到云端确认')));
+  } catch (_) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('导入未完成，原始数据仍保留，可稍后重试')));
+    }
+  }
 }

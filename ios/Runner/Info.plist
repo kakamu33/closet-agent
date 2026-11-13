@@ -26,6 +26,10 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>叠序需要使用相机拍摄衣物、搭配照片或个人头像。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>叠序需要访问照片，以选择衣物、搭配照片或个人头像。</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

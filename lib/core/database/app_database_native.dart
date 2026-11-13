@@ -11,14 +11,23 @@ import '../../features/wardrobe/domain/wardrobe_item.dart';
 import '../../features/wardrobe/domain/wardrobe_tag.dart';
 import '../time_utils.dart';
 import '../sync/sync_collection.dart';
+import '../sync/storage_coordinator.dart';
 import 'database_factory.dart';
 
-class AppDatabase implements SyncJournal {
+class AppDatabase implements SyncJournal, SyncCoordinator {
   // Keep the injected database parameter public for adapters and tests.
   // ignore: prefer_initializing_formals
   AppDatabase({Database? database, this.userId}) : _database = database;
 
   final String? userId;
+  late final _coordinator = StorageCoordinator(userId ?? 'legacy');
+  @override
+  Future<T> runLocal<T>(Future<T> Function() action) =>
+      _coordinator.local(action);
+  @override
+  Future<T> runSync<T>(String collection, Future<T> Function() action) =>
+      _coordinator.sync(collection, action);
+
   Future<Database>? _opening;
 
   Database? _database;
@@ -57,19 +66,106 @@ class AppDatabase implements SyncJournal {
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  Future<void> acknowledgeVersions(
+    String collection,
+    Map<String, int> versions,
+  ) async {
+    final table = switch (collection) {
+      'items' => 'wardrobe_items',
+      'outfits' => 'outfits',
+      'wardrobe_tags' => 'wardrobe_tags',
+      'outfit_tags' => 'outfit_tags',
+      _ => throw ArgumentError('Invalid collection'),
+    };
+    final db = await instance;
+    await db.transaction((txn) async {
+      for (final entry in versions.entries) {
+        await txn.update(
+          table,
+          {'sync_version': entry.value},
+          where: 'id = ?',
+          whereArgs: [entry.key],
+        );
+      }
+    });
+  }
+
   /// Only called for the authenticated session restored from the old app.
   /// Claiming records an owner before copying, so another account cannot import it.
-  Future<void> importLegacyData() async {
+  Future<(String?, bool)> _legacyInfo() async {
+    final path = '${await getDatabasesPath()}/diexu.db';
+    if (!await databaseExists(path)) return (null, false);
+    // Inspect unclaimed data without upgrading or otherwise modifying its file.
+    final source = await openDatabase(
+      path,
+      readOnly: true,
+      singleInstance: false,
+    );
+    try {
+      final tables = (await source.query(
+        'sqlite_master',
+        columns: ['name'],
+        where: "type = 'table'",
+      )).map((row) => row['name']).toSet();
+      String? owner;
+      var hasData = false;
+      if (tables.contains('sync_state')) {
+        final states = await source.query('sync_state');
+        for (final row in states) {
+          final value = jsonDecode(row['payload'] as String) as Map;
+          if (row['collection'] == 'legacy_owner') {
+            owner = value['userId'] as String?;
+          }
+          if ((value['pending'] as List? ?? []).isNotEmpty) hasData = true;
+        }
+      }
+      for (final table in ['wardrobe_items', 'outfits']) {
+        if (tables.contains(table) &&
+            (await source.query(table, limit: 1)).isNotEmpty) {
+          hasData = true;
+        }
+      }
+      return (owner, hasData);
+    } finally {
+      await source.close();
+    }
+  }
+
+  Future<bool> hasLegacyDataForImport() async {
+    if (userId == null || await readSyncState('legacy_import') != null) {
+      return false;
+    }
+    final (owner, hasData) = await _legacyInfo();
+    return hasData &&
+        (owner == null || owner == userId || owner == 'signed-out');
+  }
+
+  Future<void> importLegacyData({bool confirmed = false}) => StorageCoordinator(
+    'legacy-import',
+  ).local(() => runLocal(() => _importLegacyData(confirmed)));
+  Future<void> _importLegacyData(bool confirmed) async {
     if (userId == null || await readSyncState('legacy_import') != null) return;
     final legacy = AppDatabase();
     if (!await databaseExists('${await getDatabasesPath()}/diexu.db')) {
       await writeSyncState('legacy_import', {'done': true});
       return;
     }
+    final (claimedOwner, _) = await _legacyInfo();
+    if (claimedOwner != null &&
+        claimedOwner != userId &&
+        !(confirmed && claimedOwner == 'signed-out')) {
+      return;
+    }
+    if (claimedOwner == null && !confirmed) return;
     final source = await legacy.instance;
     try {
       final owner = await legacy.readSyncState('legacy_owner');
-      if (owner != null && owner['userId'] != userId) return;
+      if (owner != null &&
+          owner['userId'] != userId &&
+          !(confirmed && owner['userId'] == 'signed-out')) {
+        return;
+      }
+      if (owner == null && !confirmed) return;
       await legacy.writeSyncState('legacy_owner', {'userId': userId});
       final target = await instance;
       final tables = [
@@ -89,13 +185,49 @@ class AppDatabase implements SyncJournal {
       }
       await target.transaction((txn) async {
         for (final table in tables) {
+          if (table == 'user_profile' &&
+              (await txn.query(table, limit: 1)).isNotEmpty) {
+            continue;
+          }
           for (final row in snapshots[table]!) {
             await txn.insert(
               table,
-              row,
+              table == 'outfit_entries'
+                  ? (Map<String, Object?>.from(row)..remove('id'))
+                  : row,
               conflictAlgorithm: ConflictAlgorithm.ignore,
             );
           }
+        }
+        for (final collection in [
+          'items',
+          'outfits',
+          'wardrobe_tags',
+          'outfit_tags',
+        ]) {
+          final oldState = await legacy.readSyncState(collection);
+          final importedState = oldState ?? <String, Object?>{};
+          final targetState = await txn.query(
+            'sync_state',
+            where: 'collection = ?',
+            whereArgs: [collection],
+          );
+          final existing = targetState.isEmpty
+              ? <String, Object?>{}
+              : Map<String, Object?>.from(
+                  jsonDecode(targetState.single['payload'] as String) as Map,
+                );
+          await txn.insert('sync_state', {
+            'collection': collection,
+            'payload': jsonEncode({
+              ...existing,
+              'protocol': 1,
+              'pending': [
+                ...?existing['pending'] as List?,
+                ...?importedState['pending'] as List?,
+              ],
+            }),
+          }, conflictAlgorithm: ConflictAlgorithm.replace);
         }
         await txn.insert('sync_state', {
           'collection': 'legacy_import',
@@ -115,7 +247,7 @@ class AppDatabase implements SyncJournal {
     userId == null
         ? 'diexu.db'
         : 'diexu_${base64Url.encode(utf8.encode(userId!))}.db',
-    version: 18,
+    version: 19,
     onConfigure: (db) async => db.execute('PRAGMA foreign_keys = ON'),
     onCreate: (db, version) async {
       await _createSyncTable(db);
@@ -126,6 +258,16 @@ class AppDatabase implements SyncJournal {
       await _createCanvasLayoutTable(db);
       await _createCanvasPreferenceTable(db);
       await _createCanvasRegionTable(db);
+      for (final table in [
+        'wardrobe_items',
+        'outfits',
+        'wardrobe_tags',
+        'outfit_tags',
+      ]) {
+        await db.execute(
+          'ALTER TABLE $table ADD COLUMN sync_version INTEGER NOT NULL DEFAULT 0',
+        );
+      }
       if (userId == null) {
         await _seedTags(db);
         await _seedOutfitTags(db);
@@ -206,6 +348,18 @@ class AppDatabase implements SyncJournal {
       if (oldVersion < 17) {
         await _purgeLegacyTagIds(db);
         await _migrateTimestampColumns(db);
+      }
+      if (oldVersion < 19) {
+        for (final table in [
+          'wardrobe_items',
+          'outfits',
+          'wardrobe_tags',
+          'outfit_tags',
+        ]) {
+          await db.execute(
+            'ALTER TABLE $table ADD COLUMN sync_version INTEGER NOT NULL DEFAULT 0',
+          );
+        }
       }
     },
   );
@@ -565,7 +719,7 @@ class AppDatabase implements SyncJournal {
     for (var index = 0; index < tags.length; index++) {
       batch.update(
         'wardrobe_tags',
-        {'sort_order': index},
+        {'sort_order': index, 'sync_version': tags[index].syncVersion},
         where: 'id = ?',
         whereArgs: [tags[index].id],
       );
@@ -637,7 +791,7 @@ class AppDatabase implements SyncJournal {
     for (var index = 0; index < tags.length; index++) {
       batch.update(
         'outfit_tags',
-        {'sort_order': index},
+        {'sort_order': index, 'sync_version': tags[index].syncVersion},
         where: 'id = ?',
         whereArgs: [tags[index].id],
       );
@@ -696,6 +850,7 @@ class AppDatabase implements SyncJournal {
       result.add(
         Outfit(
           id: row['id']! as String,
+          syncVersion: (row['sync_version'] as num?)?.toInt() ?? 0,
           name: row['name']! as String,
           occasion: row['occasion']! as String,
           season: row['season']! as String,
@@ -747,6 +902,7 @@ class AppDatabase implements SyncJournal {
   Future<void> _insertOutfitRow(DatabaseExecutor txn, Outfit outfit) =>
       txn.insert('outfits', {
         'id': outfit.id,
+        'sync_version': outfit.syncVersion,
         'name': outfit.name,
         'occasion': outfit.occasion,
         'season': outfit.season,

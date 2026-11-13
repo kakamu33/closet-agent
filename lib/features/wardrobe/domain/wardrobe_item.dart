@@ -15,8 +15,10 @@ class WardrobeItem {
     this.notes,
     this.currency = 'CNY',
     this.price,
+    this.syncVersion = 0,
   });
 
+  final int syncVersion;
   final String id;
   final String name;
   final List<String> imagePaths;
@@ -36,6 +38,7 @@ class WardrobeItem {
     DateTime? updatedAt,
   }) => WardrobeItem(
     id: id,
+    syncVersion: syncVersion,
     name: name ?? this.name,
     imagePaths: imagePaths ?? this.imagePaths,
     tagIds: tagIds,
@@ -50,6 +53,7 @@ class WardrobeItem {
 
   Map<String, Object?> toMap() => {
     'id': id,
+    'sync_version': syncVersion,
     'name': name,
     'image_path': imagePath,
     'image_paths_json': jsonEncode(imagePaths),
@@ -75,6 +79,7 @@ class WardrobeItem {
     final createdAt = parseTimestamp(map['created_at'])!;
     return WardrobeItem(
       id: map['id']! as String,
+      syncVersion: (map['sync_version'] as num?)?.toInt() ?? 0,
       name: map['name']! as String,
       imagePaths: paths,
       tagIds: tags,

@@ -3,15 +3,18 @@ import 'dart:convert';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/cloudbase/cloudbase_client.dart';
+import '../../../core/sync/storage_coordinator.dart';
 import '../domain/auth_repository.dart';
 import '../domain/auth_user.dart';
 import 'auth_store.dart';
 
-class CloudBaseAuthRepository implements AuthRepository {
+class CloudBaseAuthRepository implements AuthRepository, AuthSessionEvents {
   CloudBaseAuthRepository({CloudBaseClient? client, AuthStore? store})
     : _client = client ?? CloudBaseClient(),
       _store = store ?? AuthStore();
 
+  static const _epochKey = 'diexu.cloudbase.auth.epoch.v1';
+  final _authCoordinator = StorageCoordinator('authentication');
   static const _sessionKey = 'diexu.cloudbase.auth.session.v1';
   static const _lastLoginIdentifierKey =
       'diexu.cloudbase.auth.last_login_identifier.v1';
@@ -20,9 +23,39 @@ class CloudBaseAuthRepository implements AuthRepository {
   final CloudBaseClient _client;
   final AuthStore _store;
 
+  @override
+  Stream<void> get sessionChanges => _store.sessionChanges.map((_) {
+    _sessionGeneration++;
+    _refreshing = null;
+  });
   Future<_CloudBaseSession?>? _refreshing;
   int _sessionGeneration = 0;
   bool _legacySecretsCleared = false;
+
+  Future<(int, String)> _beginIdentityChange() async {
+    final generation = ++_sessionGeneration;
+    _refreshing = null;
+    final epoch = const Uuid().v4();
+    await _authCoordinator.local(() async {
+      if (generation != _sessionGeneration) {
+        throw const AuthException('登录操作已取消');
+      }
+      await _store.write(_epochKey, epoch);
+    });
+    return (generation, epoch);
+  }
+
+  Future<void> _commitIdentity(
+    Map<String, Object?> response,
+    AuthUser user,
+    (int, String) lease,
+  ) => _authCoordinator.local(() async {
+    if (lease.$1 != _sessionGeneration ||
+        await _store.read(_epochKey) != lease.$2) {
+      throw const AuthException('登录操作已取消');
+    }
+    await _saveSession(response, user);
+  });
 
   @override
   Future<AuthUser?> currentUser() async {
@@ -69,14 +102,24 @@ class CloudBaseAuthRepository implements AuthRepository {
         },
         extraHeaders: {'x-device-id': await _deviceId()},
       );
-      if (generation != _sessionGeneration) return null;
-      await _saveSession(response, session.user);
-      return _readSession();
+      return _authCoordinator.local(() async {
+        if (generation != _sessionGeneration ||
+            (await _readSession())?.refreshToken != session.refreshToken) {
+          return null;
+        }
+        await _saveSession(response, session.user);
+        return _readSession();
+      });
     } on CloudBaseException catch (error) {
       if (generation == _sessionGeneration &&
           (error.statusCode == 401 || error.message == 'invalid_grant')) {
-        await _store.delete(_sessionKey);
-        return null;
+        return _authCoordinator.local(() async {
+          if (generation == _sessionGeneration &&
+              (await _readSession())?.refreshToken == session.refreshToken) {
+            await _store.delete(_sessionKey);
+          }
+          return null;
+        });
       }
       rethrow;
     }
@@ -115,6 +158,7 @@ class CloudBaseAuthRepository implements AuthRepository {
     required String verificationId,
     required String verificationCode,
   }) async {
+    final lease = await _beginIdentityChange();
     final normalizedUsername = username.trim().toLowerCase();
     final normalizedEmail = email.trim().toLowerCase();
     try {
@@ -151,8 +195,7 @@ class CloudBaseAuthRepository implements AuthRepository {
         createdAt: DateTime.now().toUtc(),
       );
       final accessToken = _requiredString(tokenResponse, 'access_token');
-      _sessionGeneration++;
-      await _saveSession(tokenResponse, user);
+      await _commitIdentity(tokenResponse, user, lease);
       await _ensureProfile(user, accessToken);
       final cloudUser = user;
       await _store.write(_lastLoginIdentifierKey, normalizedUsername);
@@ -167,6 +210,7 @@ class CloudBaseAuthRepository implements AuthRepository {
     required String identifier,
     required String password,
   }) async {
+    final lease = await _beginIdentityChange();
     final normalizedIdentifier = identifier.trim().toLowerCase();
     try {
       final response = await _client.requestObject(
@@ -186,8 +230,7 @@ class CloudBaseAuthRepository implements AuthRepository {
         createdAt: DateTime.now().toUtc(),
       );
       final user = await _loadCloudUser(authenticatedUser, accessToken);
-      _sessionGeneration++;
-      await _saveSession(response, user);
+      await _commitIdentity(response, user, lease);
       await _store.write(_lastLoginIdentifierKey, normalizedIdentifier);
       return user;
     } on CloudBaseException catch (error) {
@@ -219,7 +262,10 @@ class CloudBaseAuthRepository implements AuthRepository {
   Future<void> logout() async {
     _sessionGeneration++;
     _refreshing = null;
-    await _store.delete(_sessionKey);
+    await _authCoordinator.local(() async {
+      await _store.write(_epochKey, const Uuid().v4());
+      await _store.delete(_sessionKey);
+    });
   }
 
   /// 永久注销当前账号：删除 CloudBase Auth 账号本身（`auth.users` 记录）
@@ -260,7 +306,14 @@ class CloudBaseAuthRepository implements AuthRepository {
     } on CloudBaseException catch (error) {
       throw AuthException(_friendlyMessage(error));
     }
-    await logout();
+    await _authCoordinator.local(() async {
+      if ((await _readSession())?.user.id == session.user.id) {
+        _sessionGeneration++;
+        _refreshing = null;
+        await _store.write(_epochKey, const Uuid().v4());
+        await _store.delete(_sessionKey);
+      }
+    });
   }
 
   /// 每次建立或恢复会话都以云端资料为唯一来源，避免用户名登录和邮箱登录

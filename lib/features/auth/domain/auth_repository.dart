@@ -51,3 +51,8 @@ class AuthException implements Exception {
   @override
   String toString() => message;
 }
+
+/// Optional cross-tab identity changes; native stores need no browser events.
+abstract interface class AuthSessionEvents {
+  Stream<void> get sessionChanges;
+}

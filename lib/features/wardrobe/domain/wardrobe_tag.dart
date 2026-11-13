@@ -4,12 +4,14 @@ class WardrobeTag {
     required this.name,
     this.parentId,
     required this.sortOrder,
+    this.syncVersion = 0,
   });
 
   static const maxNameLength = 20;
   static const maxPrimaryTagCount = 10;
   static const maxSecondaryTagCount = 15;
 
+  final int syncVersion;
   final String id;
   final String name;
   final String? parentId;
@@ -18,18 +20,20 @@ class WardrobeTag {
   bool get isPrimary => parentId == null;
 
   Map<String, Object?> toMap() => {
-        'id': id,
-        'name': name,
-        'parent_id': parentId,
-        'sort_order': sortOrder,
-      };
+    'id': id,
+    'sync_version': syncVersion,
+    'name': name,
+    'parent_id': parentId,
+    'sort_order': sortOrder,
+  };
 
   factory WardrobeTag.fromMap(Map<String, Object?> map) => WardrobeTag(
-        id: map['id']! as String,
-        name: map['name']! as String,
-        parentId: map['parent_id'] as String?,
-        sortOrder: map['sort_order']! as int,
-      );
+    id: map['id']! as String,
+    syncVersion: (map['sync_version'] as num?)?.toInt() ?? 0,
+    name: map['name']! as String,
+    parentId: map['parent_id'] as String?,
+    sortOrder: map['sort_order']! as int,
+  );
 }
 
 /// 标准 UUID 格式（如 `3f6a7c1e-1a2b-4c3d-8e4f-000000000001`）的校验正则。
@@ -111,10 +115,29 @@ void validateTagName(WardrobeTag tag, List<WardrobeTag> existingTags) {
 /// （而不是每次随机生成），确保同一个逻辑标签在所有设备/多次注册间的
 /// id 始终一致，避免重复创建。
 const defaultWardrobeTags = <WardrobeTag>[
-  WardrobeTag(id: '3f6a7c1e-1a2b-4c3d-8e4f-000000000001', name: '上装', sortOrder: 0),
-  WardrobeTag(id: '3f6a7c1e-1a2b-4c3d-8e4f-000000000002', name: '下装', sortOrder: 1),
-  WardrobeTag(id: '3f6a7c1e-1a2b-4c3d-8e4f-000000000003', name: '全身', sortOrder: 2),
-  WardrobeTag(id: '3f6a7c1e-1a2b-4c3d-8e4f-000000000004', name: '鞋子', sortOrder: 3),
-  WardrobeTag(id: '3f6a7c1e-1a2b-4c3d-8e4f-000000000005', name: '配饰', sortOrder: 4),
+  WardrobeTag(
+    id: '3f6a7c1e-1a2b-4c3d-8e4f-000000000001',
+    name: '上装',
+    sortOrder: 0,
+  ),
+  WardrobeTag(
+    id: '3f6a7c1e-1a2b-4c3d-8e4f-000000000002',
+    name: '下装',
+    sortOrder: 1,
+  ),
+  WardrobeTag(
+    id: '3f6a7c1e-1a2b-4c3d-8e4f-000000000003',
+    name: '全身',
+    sortOrder: 2,
+  ),
+  WardrobeTag(
+    id: '3f6a7c1e-1a2b-4c3d-8e4f-000000000004',
+    name: '鞋子',
+    sortOrder: 3,
+  ),
+  WardrobeTag(
+    id: '3f6a7c1e-1a2b-4c3d-8e4f-000000000005',
+    name: '配饰',
+    sortOrder: 4,
+  ),
 ];
-

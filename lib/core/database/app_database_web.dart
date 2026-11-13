@@ -10,10 +10,19 @@ import '../../features/wardrobe/domain/wardrobe_item.dart';
 import '../../features/wardrobe/domain/wardrobe_tag.dart';
 import '../time_utils.dart';
 import '../sync/sync_collection.dart';
+import '../sync/storage_coordinator.dart';
 
-class AppDatabase implements SyncJournal {
+class AppDatabase implements SyncJournal, SyncCoordinator {
   AppDatabase({this.userId});
   final String? userId;
+  late final _coordinator = StorageCoordinator(userId ?? 'legacy');
+  @override
+  Future<T> runLocal<T>(Future<T> Function() action) =>
+      _coordinator.local(action);
+  @override
+  Future<T> runSync<T>(String collection, Future<T> Function() action) =>
+      _coordinator.sync(collection, action);
+
   String _scope(String key) =>
       userId == null ? key : '$key.${base64Url.encode(utf8.encode(userId!))}';
 
@@ -33,6 +42,26 @@ class AppDatabase implements SyncJournal {
     browserStorage[_scope('diexu.sync.$collection')] = jsonEncode(state);
   }
 
+  Future<void> acknowledgeVersions(
+    String collection,
+    Map<String, int> versions,
+  ) async {
+    final key = switch (collection) {
+      'items' => _itemsKey,
+      'outfits' => _outfitsKey,
+      'wardrobe_tags' => _tagsKey,
+      'outfit_tags' => _outfitTagsKey,
+      _ => throw ArgumentError('Invalid collection'),
+    };
+    final values = _readList(key);
+    for (final row in values) {
+      if (versions[row['id']] case final version?) {
+        row['sync_version'] = version;
+      }
+    }
+    _writeList(key, values);
+  }
+
   static const _itemsKey = 'diexu.wardrobe_items';
   static const _outfitsKey = 'diexu.outfits';
   static const _tagsKey = 'diexu.wardrobe_tags';
@@ -42,10 +71,30 @@ class AppDatabase implements SyncJournal {
   static const _canvasShowNamesKey = 'diexu.wardrobe_canvas_show_names';
   static const _canvasRegionsKey = 'diexu.wardrobe_canvas_regions';
 
-  Future<void> importLegacyData() async {
+  Future<bool> hasLegacyDataForImport() async {
+    if (userId == null || await readSyncState('legacy_import') != null) {
+      return false;
+    }
+    final owner = browserStorage['diexu.legacy_owner'];
+    if (owner != null && owner != userId && owner != 'signed-out') return false;
+    return [
+      _itemsKey,
+      _outfitsKey,
+    ].any((key) => (browserStorage[key] ?? '[]') != '[]');
+  }
+
+  Future<void> importLegacyData({bool confirmed = false}) => StorageCoordinator(
+    'legacy-import',
+  ).local(() => runLocal(() => _importLegacyData(confirmed)));
+  Future<void> _importLegacyData(bool confirmed) async {
     if (userId == null || await readSyncState('legacy_import') != null) return;
     final owner = browserStorage['diexu.legacy_owner'];
-    if (owner != null && owner != userId) return;
+    if (owner != null &&
+        owner != userId &&
+        !(confirmed && owner == 'signed-out')) {
+      return;
+    }
+    if (owner == null && !confirmed) return;
     browserStorage['diexu.legacy_owner'] = userId!;
     for (final key in [
       _itemsKey,
@@ -58,9 +107,39 @@ class AppDatabase implements SyncJournal {
       _canvasRegionsKey,
     ]) {
       final value = browserStorage[key];
-      if (value != null && browserStorage[_scope(key)] == null) {
+      if (value == null) continue;
+      final existing = browserStorage[_scope(key)];
+      if (existing == null) {
         browserStorage[_scope(key)] = value;
+      } else if (key != _profileKey && key != _canvasShowNamesKey) {
+        final current = (jsonDecode(existing) as List).cast<Map>();
+        final ids = current.map((row) => row['id'] ?? row['item_id']).toSet();
+        final incoming = (jsonDecode(value) as List).cast<Map>();
+        browserStorage[_scope(key)] = jsonEncode([
+          ...current,
+          ...incoming.where(
+            (row) => !ids.contains(row['id'] ?? row['item_id']),
+          ),
+        ]);
       }
+    }
+    for (final collection in [
+      'items',
+      'outfits',
+      'wardrobe_tags',
+      'outfit_tags',
+    ]) {
+      final old = browserStorage['diexu.sync.$collection'];
+      final existing = await readSyncState(collection) ?? {};
+      final prior = old == null ? <String, Object?>{} : jsonDecode(old) as Map;
+      await writeSyncState(collection, {
+        ...existing,
+        'protocol': 1,
+        'pending': [
+          ...?existing['pending'] as List?,
+          ...?prior['pending'] as List?,
+        ],
+      });
     }
     await writeSyncState('legacy_import', {'done': true});
   }
@@ -76,14 +155,15 @@ class AppDatabase implements SyncJournal {
         Map<String, Object?>.from(jsonDecode(raw) as Map),
       );
     } on FormatException {
-      await saveProfile(UserProfile.defaults);
-      return UserProfile.defaults;
+      throw StateError('本机资料无法解析，原始内容已保留');
     }
   }
 
   /// 清除浏览器内的业务缓存；不会触及 CloudBase 的远端数据或登录令牌。
   Future<void> clearLocalData() async {
     for (final key in const [
+      'diexu.sync.references',
+      'diexu.sync.legacy_import',
       'diexu.sync.items',
       'diexu.sync.outfits',
       'diexu.sync.wardrobe_tags',
@@ -250,7 +330,10 @@ class AppDatabase implements SyncJournal {
       final valueIndex = values.indexWhere(
         (value) => value['id'] == tags[index].id,
       );
-      if (valueIndex != -1) values[valueIndex]['sort_order'] = index;
+      if (valueIndex != -1) {
+        values[valueIndex]['sort_order'] = index;
+        values[valueIndex]['sync_version'] = tags[index].syncVersion;
+      }
     }
     _writeList(_tagsKey, values);
   }
@@ -325,7 +408,10 @@ class AppDatabase implements SyncJournal {
       final valueIndex = values.indexWhere(
         (value) => value['id'] == tags[index].id,
       );
-      if (valueIndex != -1) values[valueIndex]['sort_order'] = index;
+      if (valueIndex != -1) {
+        values[valueIndex]['sort_order'] = index;
+        values[valueIndex]['sync_version'] = tags[index].syncVersion;
+      }
     }
     _writeList(_outfitTagsKey, values);
   }
@@ -393,8 +479,7 @@ class AppDatabase implements SyncJournal {
           .map((item) => Map<String, Object?>.from(item as Map))
           .toList();
     } on FormatException {
-      browserStorage.remove(_scope(key));
-      return <Map<String, Object?>>[];
+      throw StateError('本机数据无法解析，原始内容已保留');
     }
   }
 
@@ -402,6 +487,7 @@ class AppDatabase implements SyncJournal {
       browserStorage[_scope(key)] = jsonEncode(values);
   Map<String, Object?> _outfitToJson(Outfit outfit) => {
     'id': outfit.id,
+    'sync_version': outfit.syncVersion,
     'name': outfit.name,
     'occasion': outfit.occasion,
     'season': outfit.season,
@@ -432,6 +518,7 @@ class AppDatabase implements SyncJournal {
 
   Outfit _outfitFromJson(Map<String, Object?> data) => Outfit(
     id: data['id']! as String,
+    syncVersion: (data['sync_version'] as num?)?.toInt() ?? 0,
     name: data['name']! as String,
     occasion: data['occasion']! as String,
     season: data['season']! as String,

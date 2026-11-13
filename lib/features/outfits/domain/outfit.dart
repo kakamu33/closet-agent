@@ -22,8 +22,10 @@ class Outfit {
     this.coverPath,
     this.coverPaths = const [],
     this.notes,
+    this.syncVersion = 0,
   });
 
+  final int syncVersion;
   final String id;
   final String name;
   final String occasion;
@@ -32,14 +34,14 @@ class Outfit {
   final List<OutfitEntry> entries;
   final String? coverPath;
   final List<String> coverPaths;
-  List<String> get photos => coverPaths.isNotEmpty
-      ? coverPaths
-      : <String>[?coverPath];
+  List<String> get photos =>
+      coverPaths.isNotEmpty ? coverPaths : <String>[?coverPath];
   final String? notes;
   final DateTime createdAt;
   final DateTime updatedAt;
   Map<String, Object?> toMap() => {
     'id': id,
+    'sync_version': syncVersion,
     'name': name,
     'occasion': occasion,
     'season': season,
@@ -61,6 +63,7 @@ class Outfit {
 
   factory Outfit.fromMap(Map<String, Object?> map) => Outfit(
     id: map['id']! as String,
+    syncVersion: (map['sync_version'] as num?)?.toInt() ?? 0,
     name: map['name']! as String,
     occasion: map['occasion'] as String? ?? '',
     season: map['season'] as String? ?? '',

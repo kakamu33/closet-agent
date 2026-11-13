@@ -15,11 +15,7 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   var _index = 0;
-  final _pages = const [
-    WardrobeScreen(),
-    OutfitsScreen(),
-    SettingsScreen(),
-  ];
+  final _pages = const [WardrobeScreen(), OutfitsScreen(), SettingsScreen()];
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -33,17 +29,17 @@ class _AppShellState extends State<AppShell> {
       destinations: const [
         NavigationDestination(
           icon: Icon(Icons.checkroom_outlined),
-          selectedIcon: Icon(Icons.checkroom),
+          selectedIcon: Icon(Icons.checkroom_outlined),
           label: '衣橱',
         ),
         NavigationDestination(
           icon: Icon(Icons.auto_awesome_mosaic_outlined),
-          selectedIcon: Icon(Icons.auto_awesome_mosaic),
+          selectedIcon: Icon(Icons.auto_awesome_mosaic_outlined),
           label: '搭配',
         ),
         NavigationDestination(
           icon: Icon(Icons.person_outline),
-          selectedIcon: Icon(Icons.person),
+          selectedIcon: Icon(Icons.person_outline),
           label: '个人',
         ),
       ],

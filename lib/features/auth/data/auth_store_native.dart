@@ -1,6 +1,7 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class AuthStore {
+  Stream<void> get sessionChanges => const Stream.empty();
   AuthStore() : _storage = const FlutterSecureStorage();
 
   final FlutterSecureStorage _storage;
