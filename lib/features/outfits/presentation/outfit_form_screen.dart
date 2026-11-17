@@ -7,11 +7,17 @@ import '../../../core/media/image_draft.dart';
 import '../../../core/media/photo_picker.dart';
 import '../../../core/widgets/item_image.dart';
 import '../../wardrobe/domain/wardrobe_item.dart';
+import '../../wardrobe/domain/category_selection.dart';
 import '../../wardrobe/presentation/item_detail_screen.dart';
 import '../domain/outfit.dart';
 
 class OutfitFormScreen extends ConsumerStatefulWidget {
-  const OutfitFormScreen({super.key, this.outfit});
+  const OutfitFormScreen({
+    super.key,
+    this.outfit,
+    this.initialItems = const [],
+  });
+  final List<WardrobeItem> initialItems;
   final Outfit? outfit;
 
   @override
@@ -38,6 +44,17 @@ class _OutfitFormScreenState extends ConsumerState<OutfitFormScreen> {
     _notes.text = outfit?.notes ?? '';
     _entries.addAll(outfit?.entries ?? []);
     _coverPaths.addAll(outfit?.photos ?? const []);
+    if (outfit == null) {
+      for (final item in widget.initialItems) {
+        _entries.add(
+          OutfitEntry(
+            itemId: item.id,
+            name: item.name,
+            imagePath: item.imagePath,
+          ),
+        );
+      }
+    }
   }
 
   late final ImageDraft _imageDraft;
@@ -187,11 +204,14 @@ class _OutfitFormScreenState extends ConsumerState<OutfitFormScreen> {
                             ),
                             selected: _tagIds.contains(tag.id),
                             onSelected: (selected) => setState(() {
-                              if (selected) {
-                                _tagIds.add(tag.id);
-                              } else {
-                                _tagIds.remove(tag.id);
-                              }
+                              final next = toggleCategory(
+                                _tagIds,
+                                tag.id,
+                                tags,
+                              );
+                              _tagIds
+                                ..clear()
+                                ..addAll(next);
                             }),
                           ),
                         )

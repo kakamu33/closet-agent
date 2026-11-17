@@ -247,7 +247,7 @@ class AppDatabase implements SyncJournal, SyncCoordinator {
     userId == null
         ? 'diexu.db'
         : 'diexu_${base64Url.encode(utf8.encode(userId!))}.db',
-    version: 19,
+    version: 20,
     onConfigure: (db) async => db.execute('PRAGMA foreign_keys = ON'),
     onCreate: (db, version) async {
       await _createSyncTable(db);
@@ -268,6 +268,9 @@ class AppDatabase implements SyncJournal, SyncCoordinator {
           'ALTER TABLE $table ADD COLUMN sync_version INTEGER NOT NULL DEFAULT 0',
         );
       }
+      await db.execute(
+        "ALTER TABLE wardrobe_items ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'",
+      );
       if (userId == null) {
         await _seedTags(db);
         await _seedOutfitTags(db);
@@ -360,6 +363,11 @@ class AppDatabase implements SyncJournal, SyncCoordinator {
             'ALTER TABLE $table ADD COLUMN sync_version INTEGER NOT NULL DEFAULT 0',
           );
         }
+      }
+      if (oldVersion < 20) {
+        await db.execute(
+          "ALTER TABLE wardrobe_items ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'",
+        );
       }
     },
   );

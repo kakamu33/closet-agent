@@ -1,3 +1,5 @@
+import '../../../core/media/photo_editor.dart';
+import '../domain/item_details.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
@@ -10,6 +12,7 @@ import '../../../core/widgets/item_image.dart';
 import '../data/background_removal_service.dart';
 import '../domain/wardrobe_item.dart';
 import '../domain/wardrobe_tag.dart';
+import '../domain/category_selection.dart';
 
 class ItemFormScreen extends ConsumerStatefulWidget {
   const ItemFormScreen({super.key, this.item});
@@ -32,6 +35,11 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
   late final List<String> _photos = [...?widget.item?.imagePaths];
   late final Set<String> _tagIds = {...?widget.item?.tagIds};
   late final String _itemId = widget.item?.id ?? const Uuid().v4();
+  late final _size = TextEditingController(text: widget.item?.details.size);
+  late final _material = TextEditingController(
+    text: widget.item?.details.material,
+  );
+  late ItemDetails _details = widget.item?.details ?? const ItemDetails();
   var _saving = false;
   var _showNameError = false;
   final Set<String> _removingBackground = {};
@@ -52,6 +60,8 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
     _color.dispose();
     _price.dispose();
     _notes.dispose();
+    _size.dispose();
+    _material.dispose();
     super.dispose();
   }
 
@@ -71,6 +81,23 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
           context,
         ).showSnackBar(const SnackBar(content: Text('照片保存失败，请重试。')));
       }
+    }
+  }
+
+  Future<void> _editPhoto(String photo) async {
+    try {
+      final next = await editClothingPhoto(context, ref, photo);
+      if (next == null || !mounted) return;
+      _imageDraft.track(next);
+      setState(() {
+        final originals = {..._details.originals}..remove(photo);
+        originals[next] = _details.originals[photo] ?? photo;
+        _details = _details.copyWith(originals: originals);
+        final index = _photos.indexOf(photo);
+        if (index >= 0) _photos[index] = next;
+      });
+    } catch (_) {
+      if (mounted) _showMessage('图片编辑失败，请重试');
     }
   }
 
@@ -105,7 +132,12 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
       if (!mounted) return;
       setState(() {
         final index = _photos.indexOf(photo);
-        if (index >= 0) _photos[index] = transparentImage;
+        if (index >= 0) {
+          final originals = {..._details.originals}..remove(photo);
+          originals[transparentImage] = _details.originals[photo] ?? photo;
+          _details = _details.copyWith(originals: originals);
+          _photos[index] = transparentImage;
+        }
       });
       _showMessage('已移除背景，透明 PNG 将随单品一起保存。');
     } on BackgroundRemovalException catch (error) {
@@ -124,31 +156,19 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
   }
 
   void _toggleTag(String id, List<WardrobeTag> allTags) {
-    if (_tagIds.contains(id)) {
-      _tagIds.remove(id);
-    } else {
-      // 检查数量限制
-      final tag = allTags.firstWhere((t) => t.id == id);
-      if (tag.isPrimary) {
-        final primaryCount = allTags
-            .where((t) => t.isPrimary && _tagIds.contains(t.id))
-            .length;
-        if (primaryCount >= WardrobeTag.maxPrimaryTagCount) {
-          _showMessage('一级标签最多 ${WardrobeTag.maxPrimaryTagCount} 个');
-          return;
-        }
-      } else {
-        final secondaryCount = allTags
-            .where((t) => !t.isPrimary && _tagIds.contains(t.id))
-            .length;
-        if (secondaryCount >= WardrobeTag.maxSecondaryTagCount) {
-          _showMessage('二级标签最多 ${WardrobeTag.maxSecondaryTagCount} 个');
-          return;
-        }
-      }
-      _tagIds.add(id);
+    final next = toggleCategory(_tagIds, id, allTags);
+    if (allTags.where((tag) => tag.isPrimary && next.contains(tag.id)).length >
+            WardrobeTag.maxPrimaryTagCount ||
+        allTags.where((tag) => !tag.isPrimary && next.contains(tag.id)).length >
+            WardrobeTag.maxSecondaryTagCount) {
+      _showMessage('所选分类超出数量限制');
+      return;
     }
-    setState(() {});
+    setState(() {
+      _tagIds
+        ..clear()
+        ..addAll(next);
+    });
   }
 
   Future<void> _save() async {
@@ -162,6 +182,10 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
     setState(() => _saving = true);
     try {
       final item = WardrobeItem(
+        details: _details.copyWith(
+          size: _size.text.trim(),
+          material: _material.text.trim(),
+        ),
         syncVersion: widget.item?.syncVersion ?? 0,
         id: _itemId,
         name: _name.text.trim(),
@@ -175,9 +199,15 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
         createdAt: widget.item?.createdAt ?? DateTime.now(),
         updatedAt: DateTime.now(),
       );
-      _imageDraft.preserve(item.imagePaths);
+      _imageDraft.preserve([
+        ...item.imagePaths,
+        ...item.details.originals.values,
+      ]);
       await ref.read(wardrobeItemsProvider.notifier).save(item);
-      _imageDraft.commit(item.imagePaths);
+      _imageDraft.commit([
+        ...item.imagePaths,
+        ...item.details.originals.values,
+      ]);
       if (mounted) Navigator.pop(context, item);
     } catch (_) {
       if (mounted) _showMessage('保存失败，请稍后重试。');
@@ -246,6 +276,16 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
                                   onTap: () => _confirmRemoveBackground(photo),
                                 ),
                               ),
+                            if (!_removingBackground.contains(photo))
+                              Positioned(
+                                right: 4,
+                                bottom: 4,
+                                child: IconButton.filledTonal(
+                                  tooltip: '编辑图片',
+                                  onPressed: () => _editPhoto(photo),
+                                  icon: const Icon(Icons.crop_rotate, size: 18),
+                                ),
+                              ),
                             Positioned(
                               top: 2,
                               right: 2,
@@ -312,6 +352,78 @@ class _ItemFormScreenState extends ConsumerState<ItemFormScreen> {
               error: (_, _) => const Text('标签加载失败'),
             ),
             const SizedBox(height: 22),
+            Text('穿着信息', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            const Text('季节（可多选）', style: TextStyle(fontSize: 13)),
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final season in ['春季', '夏季', '秋季', '冬季'])
+                  FilterChip(
+                    label: Text(season),
+                    selected: _details.seasons.contains(season),
+                    onSelected: (v) => setState(() {
+                      final next = {..._details.seasons};
+                      v ? next.add(season) : next.remove(season);
+                      _details = _details.copyWith(seasons: next.toList());
+                    }),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const Text('厚薄（选填）', style: TextStyle(fontSize: 13)),
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final value in ItemDetails.warmthOptions)
+                  ChoiceChip(
+                    label: Text(value),
+                    selected: _details.warmth == value,
+                    onSelected: (v) => setState(
+                      () =>
+                          _details = _details.copyWith(warmth: v ? value : ''),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const Text('衣物状态', style: TextStyle(fontSize: 13)),
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final entry in ItemDetails.statusLabels.entries)
+                  ChoiceChip(
+                    label: Text(entry.value),
+                    selected: _details.status == entry.key,
+                    onSelected: (_) => setState(
+                      () => _details = _details.copyWith(status: entry.key),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            const Text('尺码（选填）', style: TextStyle(fontSize: 13)),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _size,
+              maxLength: 30,
+              decoration: const InputDecoration(
+                hintText: '例如：M / 165',
+                counterText: '',
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text('材质（选填）', style: TextStyle(fontSize: 13)),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _material,
+              maxLength: 100,
+              decoration: const InputDecoration(
+                hintText: '例如：100% 棉',
+                counterText: '',
+              ),
+            ),
+            const SizedBox(height: 20),
             Text('品牌（可选）', style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 8),
             TextFormField(

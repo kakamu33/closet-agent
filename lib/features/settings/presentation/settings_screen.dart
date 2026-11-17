@@ -84,9 +84,10 @@ class SettingsScreen extends ConsumerWidget {
                     ('衣物与搭配', '单品、搭配和分类会同步到当前账号。未完成同步的修改保留在本机，可在个人页查看状态并重试。'),
                     (
                       '照片与抠图',
-                      '图片云存储可用时，单品和搭配照片会随数据上传；未能上传时保留在本机。使用抠图功能需要将照片上传至抠图服务处理。',
+                      '图片云存储可用时，头像、单品和搭配照片会随数据上传；未能上传时保留在本机。使用抠图功能需要将照片上传至抠图服务处理。',
                     ),
-                    ('仅在此设备保存', '个人头像、昵称、签名和线上衣柜的布局保存在此设备，不会随衣物与搭配一起同步。'),
+                    ('个人资料', '昵称、签名和头像会同步到当前账号。离线修改保留在本机，多端冲突需要你确认保留哪一份。'),
+                    ('仅在此设备保存', '线上衣柜布局、未录入草稿和自定义颜色候选保存在当前设备。'),
                     (
                       '删除账号',
                       '可在“账号与安全”中注销账号。注销会永久删除账号及关联数据，无法恢复；请先确认没有需要保留的内容。',
@@ -577,6 +578,7 @@ class _ProfileEditScreenState extends ConsumerState<_ProfileEditScreen> {
           .save(
             UserProfile(
               id: widget.profile.id,
+              syncVersion: widget.profile.syncVersion,
               nickname: _nickname.text.trim(),
               signature: _signature.text.trim(),
               avatarPath: _avatarPath,
@@ -676,7 +678,7 @@ class _ProfileEditScreenState extends ConsumerState<_ProfileEditScreen> {
             ),
             const SizedBox(height: 24),
             const Text(
-              '个人资料仅保存在当前设备',
+              '昵称、签名和头像同步到当前账号；未同步的修改保留在本机',
               style: TextStyle(
                 fontSize: 12,
                 height: 1.5,

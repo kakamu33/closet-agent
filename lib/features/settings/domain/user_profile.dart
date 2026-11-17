@@ -4,12 +4,23 @@ class UserProfile {
     required this.nickname,
     required this.signature,
     this.avatarPath,
+    this.syncVersion = 0,
   });
 
   final String id;
   final String nickname;
   final String signature;
   final String? avatarPath;
+  final int syncVersion;
+
+  UserProfile withVersion(int version) => UserProfile(
+    id: id,
+    nickname: nickname,
+    signature: signature,
+    avatarPath: avatarPath,
+    syncVersion: version,
+  );
+  Map<String, Object?> toSyncMap() => {...toMap(), 'sync_version': syncVersion};
 
   static const defaults = UserProfile(
     id: 'diexu_local',
@@ -18,17 +29,17 @@ class UserProfile {
   );
 
   Map<String, Object?> toMap() => {
-        'id': id,
-        'nickname': nickname,
-        'signature': signature,
-        'avatar_path': avatarPath,
-      };
+    'id': id,
+    'nickname': nickname,
+    'signature': signature,
+    'avatar_path': avatarPath,
+  };
 
   factory UserProfile.fromMap(Map<String, Object?> map) => UserProfile(
-        id: map['id']! as String,
-        nickname: map['nickname']! as String,
-        signature: map['signature']! as String,
-        avatarPath: map['avatar_path'] as String?,
-      );
+    id: map['id']! as String,
+    nickname: map['nickname']! as String,
+    signature: map['signature']! as String,
+    avatarPath: map['avatar_path'] as String?,
+    syncVersion: (map['sync_version'] as num?)?.toInt() ?? 0,
+  );
 }
-

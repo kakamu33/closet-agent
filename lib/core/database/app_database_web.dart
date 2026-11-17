@@ -163,8 +163,11 @@ class AppDatabase implements SyncJournal, SyncCoordinator {
   Future<void> clearLocalData() async {
     for (final key in const [
       'diexu.sync.references',
+      'diexu.sync.batch_import',
+      'diexu.sync.batch_colors',
       'diexu.sync.legacy_import',
       'diexu.sync.items',
+      'diexu.sync.profile',
       'diexu.sync.outfits',
       'diexu.sync.wardrobe_tags',
       'diexu.sync.outfit_tags',

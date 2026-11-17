@@ -1,3 +1,8 @@
+import 'item_attribute_editor.dart';
+import '../../../core/media/photo_editor.dart';
+import '../../assistant/presentation/assistant_screen.dart';
+import '../../outfits/presentation/outfit_form_screen.dart';
+import '../domain/item_details.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/widgets/detail_layout.dart';
@@ -21,6 +26,153 @@ class ItemDetailScreen extends ConsumerStatefulWidget {
 class _ItemDetailScreenState extends ConsumerState<ItemDetailScreen> {
   late WardrobeItem _item = widget.item;
   String? _removingPath;
+  bool _savingAttribute = false;
+
+  Future<void> _editAttribute(String field) async {
+    if (_savingAttribute) return;
+    final owner = ref.read(authSessionProvider).value?.id;
+    final controller = ref.read(wardrobeItemsProvider.notifier);
+    final before = _item;
+    final value = await editItemAttribute(context, before, field);
+    if (value == null ||
+        !mounted ||
+        ref.read(authSessionProvider).value?.id != owner) {
+      return;
+    }
+    setState(() => _savingAttribute = true);
+    try {
+      await controller.updateAttribute(before, field, value);
+      if (!mounted || ref.read(authSessionProvider).value?.id != owner) return;
+      final current = (await ref.read(
+        wardrobeItemsProvider.future,
+      )).where((i) => i.id == before.id).firstOrNull;
+      if (mounted &&
+          current != null &&
+          ref.read(authSessionProvider).value?.id == owner) {
+        setState(() => _item = current);
+      }
+    } catch (error) {
+      if (mounted) _showMessage('保存失败：$error');
+    } finally {
+      if (mounted) setState(() => _savingAttribute = false);
+    }
+  }
+
+  Future<void> _moreAttributes() async {
+    final owner = ref.read(authSessionProvider).value?.id;
+    final field = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: const Color(0xFFFCFBF8),
+      isScrollControlled: true,
+      builder: (context) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * .7,
+          ),
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(24, 8, 24, 12),
+                child: Text(
+                  '单品属性',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                ),
+              ),
+              for (final entry in itemAttributeLabels.entries)
+                ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+                  title: Text(
+                    entry.value,
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                  trailing: const Icon(Icons.chevron_right, size: 18),
+                  onTap: () => Navigator.pop(context, entry.key),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (field != null &&
+        mounted &&
+        ref.read(authSessionProvider).value?.id == owner) {
+      await _editAttribute(field);
+    }
+  }
+
+  Widget _attributeChip(String field, String label, {Color? background}) =>
+      Material(
+        color: background ?? const Color(0xFFF0EDE7),
+        borderRadius: BorderRadius.circular(7),
+        child: InkWell(
+          onTap: _savingAttribute ? null : () => _editAttribute(field),
+          borderRadius: BorderRadius.circular(7),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    label,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      height: 1.3,
+                      color: Color(0xFF514C43),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 5),
+                const Icon(
+                  Icons.expand_more,
+                  size: 14,
+                  color: Color(0xFF8B8276),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+  Future<void> _editPhoto(String path, {bool restore = false}) async {
+    if (_removingPath != null) return;
+    final owner = ref.read(authSessionProvider).value?.id;
+    final controller = ref.read(wardrobeItemsProvider.notifier);
+    final before = _item;
+    setState(() => _removingPath = path);
+    try {
+      final next = restore
+          ? before.details.originals[path]
+          : await editClothingPhoto(context, ref, path);
+      if (next == null ||
+          !mounted ||
+          ref.read(authSessionProvider).value?.id != owner) {
+        return;
+      }
+      final originals = {...before.details.originals}..remove(path);
+      if (!restore) originals[next] = before.details.originals[path] ?? path;
+      final updated = before.copyWith(
+        imagePaths: before.imagePaths.map((p) => p == path ? next : p).toList(),
+        details: before.details.copyWith(originals: originals),
+        updatedAt: DateTime.now(),
+      );
+      await controller.save(updated);
+      if (mounted && ref.read(authSessionProvider).value?.id == owner) {
+        setState(() => _item = updated);
+      }
+    } catch (_) {
+      if (mounted) _showMessage('图片保存失败，请重试；原图仍保留');
+    } finally {
+      if (mounted) setState(() => _removingPath = null);
+    }
+  }
+
+  void _createOutfit() => Navigator.push(
+    context,
+    MaterialPageRoute(builder: (_) => OutfitFormScreen(initialItems: [_item])),
+  );
 
   Future<void> _confirmRemoveBackground(String path) async {
     final confirmed = await showDialog<bool>(
@@ -44,19 +196,26 @@ class _ItemDetailScreenState extends ConsumerState<ItemDetailScreen> {
   }
 
   Future<void> _removeBackground(String path) async {
+    final owner = ref.read(authSessionProvider).value?.id;
+    final controller = ref.read(wardrobeItemsProvider.notifier);
+    final before = _item;
     setState(() => _removingPath = path);
     try {
       final transparentImage = await ref
           .read(backgroundRemovalServiceProvider)
           .removeBackground(imagePath: path);
-      final paths = _item.imagePaths
+      if (!mounted || ref.read(authSessionProvider).value?.id != owner) return;
+      final paths = before.imagePaths
           .map((entry) => entry == path ? transparentImage : entry)
           .toList();
-      final updated = _item.copyWith(
+      final originals = {...before.details.originals}..remove(path);
+      originals[transparentImage] = before.details.originals[path] ?? path;
+      final updated = before.copyWith(
+        details: before.details.copyWith(originals: originals),
         imagePaths: paths,
         updatedAt: DateTime.now(),
       );
-      await ref.read(wardrobeItemsProvider.notifier).save(updated);
+      await controller.save(updated);
       if (!mounted) return;
       setState(() => _item = updated);
       _showMessage('背景已去除，透明 PNG 已替换原图。');
@@ -85,7 +244,19 @@ class _ItemDetailScreenState extends ConsumerState<ItemDetailScreen> {
     if (latest != null) _item = latest;
     final related = ref.watch(itemOutfitsProvider(_item.id));
     final allTags = ref.watch(wardrobeTagsProvider).value ?? const [];
-    final tagNames = _item.tagIds
+    final orderedIds = [..._item.tagIds]
+      ..sort((a, b) {
+        final pa =
+            allTags.where((t) => t.id == a).firstOrNull?.isPrimary ?? false;
+        final pb =
+            allTags.where((t) => t.id == b).firstOrNull?.isPrimary ?? false;
+        return pa == pb
+            ? 0
+            : pa
+            ? -1
+            : 1;
+      });
+    final tagNames = orderedIds
         .map(
           (id) => allTags
               .where((tag) => tag.id == id)
@@ -94,15 +265,19 @@ class _ItemDetailScreenState extends ConsumerState<ItemDetailScreen> {
         )
         .whereType<String>()
         .toList();
-    final brand = _item.brand?.trim().isNotEmpty == true
-        ? _item.brand!.trim()
-        : null;
-    final color = _item.color?.trim().isNotEmpty == true
-        ? _item.color!.trim()
-        : null;
-    final price = _item.price == null
-        ? null
-        : '${_item.currency} ${_item.price!.toStringAsFixed(_item.price! % 1 == 0 ? 0 : 2)}';
+    final attributes = <(String, String)>[
+      if (_item.color?.isNotEmpty == true) ('color', '颜色 · ${_item.color}'),
+      if (_item.details.seasons.isNotEmpty)
+        ('seasons', _item.details.seasons.join(' · ')),
+      if (_item.details.warmth?.isNotEmpty == true)
+        ('warmth', '厚薄 · ${_item.details.warmth}'),
+      if (_item.details.size?.isNotEmpty == true)
+        ('size', '尺码 · ${_item.details.size}'),
+      if (_item.details.material?.isNotEmpty == true)
+        ('material', '材质 · ${_item.details.material}'),
+      if (_item.brand?.isNotEmpty == true) ('brand', '品牌 · ${_item.brand}'),
+      if (_item.price != null) ('price', '${_item.currency} ${_item.price}'),
+    ];
     return Scaffold(
       appBar: AppBar(
         backgroundColor: const Color(0xFFF7F5F1),
@@ -173,25 +348,89 @@ class _ItemDetailScreenState extends ConsumerState<ItemDetailScreen> {
             paths: _item.imagePaths,
             processingPath: _removingPath,
             onRemoveBackground: _confirmRemoveBackground,
+            onEdit: _editPhoto,
+            restorablePaths: _item.details.originals.keys.toSet(),
+            onRestore: _item.details.originals.isEmpty
+                ? null
+                : (path) => _editPhoto(path, restore: true),
           ),
           DetailHeading(
             title: _item.name,
             category: tagNames.join(' · '),
             kind: '单品档案',
           ),
-          if (brand != null || color != null || price != null)
-            DetailFacts(
-              values: [
-                if (brand != null) ('品牌', brand),
-                if (color != null) ('颜色', color),
-                if (price != null) ('购入价格', price),
-              ],
+          Wrap(
+            spacing: 7,
+            runSpacing: 7,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _attributeChip(
+                'status',
+                ItemDetails.statusLabels[_item.details.status] ?? '可穿',
+                background: switch (_item.details.status) {
+                  'laundry' => const Color(0xFFE1EBF1),
+                  'paused' => const Color(0xFFEAE4ED),
+                  _ => const Color(0xFFE7EDE2),
+                },
+              ),
+              for (final attribute in attributes)
+                _attributeChip(attribute.$1, attribute.$2),
+              TextButton(
+                onPressed: _savingAttribute ? null : _moreAttributes,
+                style: TextButton.styleFrom(
+                  foregroundColor: const Color(0xFF80786B),
+                  textStyle: const TextStyle(fontSize: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 10,
+                  ),
+                ),
+                child: Text(_savingAttribute ? '保存中…' : '+ 补充属性'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: _item.details.status == 'ready'
+                  ? () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => AssistantScreen(requiredItem: _item),
+                      ),
+                    )
+                  : null,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF705841),
+                side: const BorderSide(color: Color(0xFFD8D0C4)),
+                textStyle: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 11,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              icon: const Icon(Icons.auto_awesome_outlined, size: 16),
+              label: const Text('用这件帮我搭配'),
             ),
+          ),
           if (_item.notes?.trim().isNotEmpty == true) ...[
             const DetailSectionTitle(title: '单品笔记'),
-            Text(
-              _item.notes!.trim(),
-              style: const TextStyle(fontSize: 14, height: 1.7),
+            InkWell(
+              onTap: () => _editAttribute('notes'),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Text(
+                  _item.notes!.trim(),
+                  style: const TextStyle(fontSize: 14, height: 1.7),
+                ),
+              ),
             ),
           ],
           DetailSectionTitle(
@@ -202,11 +441,25 @@ class _ItemDetailScreenState extends ConsumerState<ItemDetailScreen> {
           ),
           related.when(
             data: (outfits) => outfits.isEmpty
-                ? const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: Text(
-                      '还没有使用这件单品的搭配',
-                      style: TextStyle(fontSize: 13, color: Color(0xFF807B74)),
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          '还没有使用这件单品的搭配',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Color(0xFF807B74),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextButton.icon(
+                          onPressed: _createOutfit,
+                          icon: const Icon(Icons.add, size: 18),
+                          label: const Text('创建搭配'),
+                        ),
+                      ],
                     ),
                   )
                 : Column(

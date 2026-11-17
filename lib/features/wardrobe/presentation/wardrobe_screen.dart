@@ -1,10 +1,13 @@
+import '../../../core/media/batch_photo_processor.dart';
+import '../../../core/media/batch_photo_sheet.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:uuid/uuid.dart';
 
 import '../../../core/providers.dart';
+import '../../../core/widgets/category_picker.dart';
+import '../../../core/widgets/record_selection.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/item_image.dart';
 import '../../search/presentation/search_results_screen.dart';
@@ -12,6 +15,7 @@ import '../../shell/app_shell.dart';
 import '../domain/wardrobe_tag.dart';
 import 'item_detail_screen.dart';
 import 'item_form_screen.dart';
+import '../batch/batch_import_screen.dart';
 import 'wardrobe_canvas_screen.dart';
 
 class WardrobeScreen extends ConsumerStatefulWidget {
@@ -26,7 +30,102 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
   String? _primaryId;
   String? _detailId;
   bool _editingTags = false;
+  bool _selecting = false;
+  bool _bulkBusy = false;
+  String? _bulkError;
+  final _selectedRecords = <String>{};
+  Set<String> _visibleRecords = {};
   _WardrobeSort _sort = _WardrobeSort.newest;
+
+  void _cancelSelection() => setState(() {
+    _selecting = false;
+    _selectedRecords.clear();
+    _bulkError = null;
+  });
+  void _toggleRecord(String id) {
+    if (_bulkBusy) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..removeCurrentSnackBar();
+    setState(() {
+      _bulkError = null;
+      _selecting = true;
+      _editingTags = false;
+      _selectedRecords.contains(id)
+          ? _selectedRecords.remove(id)
+          : _selectedRecords.add(id);
+    });
+  }
+
+  Future<void> _batchPhotos(BatchPhotoOperation operation) async {
+    if (_bulkBusy || _selectedRecords.isEmpty) return;
+    final owner = ref.read(authSessionProvider).value?.id;
+    final controller = ref.read(wardrobeItemsProvider.notifier);
+    final ids = _selectedRecords.toList();
+    setState(() => _bulkBusy = true);
+    try {
+      await showBatchPhotoSheet(
+        context,
+        ref,
+        ids: ids,
+        operation: operation,
+        read: (id) async => (await ref.read(
+          wardrobeItemsProvider.future,
+        )).where((i) => i.id == id).firstOrNull,
+        save: controller.replacePhotos,
+      );
+    } finally {
+      if (mounted && ref.read(authSessionProvider).value?.id == owner) {
+        setState(() => _bulkBusy = false);
+      }
+    }
+  }
+
+  Future<void> _bulkAction(bool moving) async {
+    if (_bulkBusy || _selectedRecords.isEmpty) return;
+    final owner = ref.read(authSessionProvider).value?.id;
+    final controller = ref.read(wardrobeItemsProvider.notifier);
+    final ids = Set<String>.of(_selectedRecords);
+    List<String>? target;
+    if (moving) {
+      target = await showCategoryPicker(
+        context,
+        [],
+        outfits: false,
+        moving: true,
+      );
+      if (target == null) return;
+    } else if (!await confirmRecordDeletion(
+      context,
+      ids.length,
+      outfits: false,
+    )) {
+      return;
+    }
+    if (!mounted || ref.read(authSessionProvider).value?.id != owner) return;
+    setState(() {
+      _bulkBusy = true;
+      _bulkError = null;
+    });
+    try {
+      if (moving) {
+        await controller.moveMany(ids, target!);
+      } else {
+        await controller.removeMany(ids);
+      }
+      if (mounted && ref.read(authSessionProvider).value?.id == owner) {
+        _cancelSelection();
+      }
+    } catch (error) {
+      if (mounted && ref.read(authSessionProvider).value?.id == owner) {
+        setState(() => _bulkError = '部分操作未完成，可重试：$error');
+      }
+    } finally {
+      if (mounted && ref.read(authSessionProvider).value?.id == owner) {
+        setState(() => _bulkBusy = false);
+      }
+    }
+  }
 
   @override
   void initState() {
@@ -41,8 +140,12 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
   }
 
   void _exitTagEditingWhenInactive() {
-    if (shellTabIndex.value != 0 && _editingTags && mounted) {
-      setState(() => _editingTags = false);
+    if (shellTabIndex.value != 0 && (_editingTags || _selecting) && mounted) {
+      setState(() {
+        _editingTags = false;
+        _selecting = false;
+        _selectedRecords.clear();
+      });
     }
   }
 
@@ -64,6 +167,20 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(authSessionProvider.select((session) => session.value?.id), (
+      old,
+      current,
+    ) {
+      if (old != current) {
+        setState(() {
+          _selecting = false;
+          _bulkBusy = false;
+          _selectedRecords.clear();
+        });
+      }
+    });
+
+    _visibleRecords = {};
     final tagState = ref.watch(wardrobeTagsProvider);
     final itemState = ref.watch(wardrobeItemsProvider);
     // Hide the FAB only when the alternative recording CTA can be rendered.
@@ -74,479 +191,533 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
         itemState.asData?.value.isEmpty == true &&
         !itemState.isLoading &&
         !itemState.hasError;
-    return Scaffold(
-      appBar: AppBar(
-        titleSpacing: 18,
-        title: const Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _WardrobeLogo(),
-            SizedBox(width: 9),
-            Text(
-              '衣橱',
-              style: TextStyle(
-                fontFamily: 'LXGWWenKai',
-                fontSize: 22,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF5C3A20),
-                letterSpacing: .4,
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: TextButton.icon(
-              style: TextButton.styleFrom(
-                foregroundColor: const Color(0xFF6F6257),
-                minimumSize: const Size(48, 44),
-                textStyle: const TextStyle(fontSize: 13),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const WardrobeCanvasScreen()),
-              ),
-              icon: const Icon(Icons.dashboard_customize_outlined, size: 19),
-              label: const Text('线上衣柜'),
-            ),
-          ),
-        ],
-      ),
-      floatingActionButton: showsEmptyWardrobe
-          ? null
-          : FloatingActionButton.extended(
-              heroTag: 'wardrobe-add',
-              onPressed: _openNewItem,
-              elevation: 0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              icon: const Icon(Icons.add, size: 20),
-              label: const Text('录入', style: TextStyle(fontSize: 14)),
-            ),
-      body: tagState.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (error, _) => Center(child: Text('标签加载失败：$error')),
-        data: (tags) {
-          final primary = tags.where((tag) => tag.isPrimary).toList();
-          final details = _primaryId == null
-              ? <WardrobeTag>[]
-              : tags.where((tag) => tag.parentId == _primaryId).toList();
-          return Column(
+    return PopScope(
+      canPop: !_selecting,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _selecting && !_bulkBusy) _cancelSelection();
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          titleSpacing: 18,
+          title: const Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 4, 20, 4),
-                child: Container(
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFCFBF8),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: const Color(0xFFE5E0D9),
-                      width: 1,
-                    ),
-                  ),
-                  child: Center(
-                    child: TextField(
-                      textAlignVertical: TextAlignVertical.center,
-                      style: const TextStyle(
-                        fontFamily: 'SourceHanSansCN',
-                        fontSize: 14,
-                        color: Color(0xFF382C20),
-                      ),
-                      decoration: const InputDecoration(
-                        filled: false,
-                        fillColor: Colors.transparent,
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                        disabledBorder: InputBorder.none,
-                        isDense: true,
-                        prefixIcon: Icon(
-                          Icons.search_rounded,
-                          color: Color(0xFF796F65),
-                          size: 18,
-                        ),
-                        prefixIconConstraints: BoxConstraints(
-                          minWidth: 40,
-                          minHeight: 44,
-                        ),
-                        hintText: '搜索名称、标签、颜色',
-                        hintStyle: TextStyle(
-                          fontFamily: 'SourceHanSansCN',
-                          fontSize: 14,
-                          color: Color(0xFF796F65),
-                        ),
-                        contentPadding: EdgeInsets.symmetric(vertical: 11),
-                      ),
-                      readOnly: true,
-                      onTap: () {
-                        _exitTagEditing();
-                        _openSearch('');
-                      },
-                      onSubmitted: (query) {
-                        _exitTagEditing();
-                        _openSearch(query);
-                      },
-                    ),
-                  ),
-                ),
-              ),
-              _TagRow(
-                tags: primary,
-                selectedId: _primaryId,
-                allLabel: '全部',
-                onSelect: (id) => setState(() {
-                  _primaryId = id;
-                  _detailId = null;
-                }),
-                onAdd: () => _editTag(),
-                onEdit: (tag) => _editTag(tag: tag),
-                onDelete: _deleteTag,
-                editing: _editingTags,
-                onStartEditing: _enterTagEditing,
-                onStartEditingTag: (_) => _enterTagEditing(),
-                onReorder: (oldIndex, newIndex) =>
-                    _reorderTags(primary, oldIndex, newIndex),
-              ),
-              Expanded(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onTap: _editingTags
-                      ? () => setState(() => _editingTags = false)
-                      : null,
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (_primaryId != null)
-                        _DetailTags(
-                          tags: details,
-                          selectedId: _detailId,
-                          onSelect: (id) => setState(() => _detailId = id),
-                          onAdd: () => _editTag(parentId: _primaryId),
-                          onEdit: (tag) => _editTag(tag: tag),
-                          onDelete: _deleteTag,
-                          editing: _editingTags,
-                          onStartEditing: _enterTagEditing,
-                          onStartEditingTag: (_) => _enterTagEditing(),
-                          onReorder: (oldIndex, newIndex) =>
-                              _reorderTags(details, oldIndex, newIndex),
-                        ),
-                      Expanded(
-                        child: itemState.when(
-                          loading: () =>
-                              const Center(child: CircularProgressIndicator()),
-                          error: (error, _) => EmptyState(
-                            icon: Icons.error_outline,
-                            title: '衣橱加载失败',
-                            message: '$error',
-                          ),
-                          data: (items) {
-                            final visibleTagIds = _detailId != null
-                                ? <String>{_detailId!}
-                                : _primaryId == null
-                                ? <String>{}
-                                : <String>{
-                                    _primaryId!,
-                                    ...tags
-                                        .where(
-                                          (tag) => tag.parentId == _primaryId,
-                                        )
-                                        .map((tag) => tag.id),
-                                  };
-                            final filtered = items
-                                .where(
-                                  (item) =>
-                                      (visibleTagIds.isEmpty ||
-                                          item.tagIds.any(
-                                            visibleTagIds.contains,
-                                          )) &&
-                                      true,
-                                )
-                                .toList();
-                            if (items.isEmpty) {
-                              return EmptyState(
-                                icon: Icons.checkroom_outlined,
-                                illustration: const _WardrobeIllustration(),
-                                title: '把第一件衣服放进衣橱',
-                                message: '拍照或从相册选择，建立你的单品记录。',
-                                action: FilledButton.icon(
-                                  onPressed: _openNewItem,
-                                  style: FilledButton.styleFrom(
-                                    backgroundColor: const Color(0xFF805A3B),
-                                    foregroundColor: Colors.white,
-                                    minimumSize: const Size(0, 48),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 20,
-                                      vertical: 12,
-                                    ),
-                                    textStyle: const TextStyle(fontSize: 14),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                  ),
-                                  icon: const Icon(Icons.add, size: 18),
-                                  label: const Text('添加第一件衣物'),
-                                ),
-                              );
-                            }
-                            if (filtered.isEmpty) {
-                              return const EmptyState(
-                                icon: Icons.search_off,
-                                title: '这个分类还没有衣物',
-                                message: '添加衣物时选择此分类，或切换分类查看。',
-                              );
-                            }
-                            filtered.sort((a, b) {
-                              final result = switch (_sort) {
-                                _WardrobeSort.newest => b.createdAt.compareTo(
-                                  a.createdAt,
-                                ),
-                                _WardrobeSort.oldest => a.createdAt.compareTo(
-                                  b.createdAt,
-                                ),
-                                _WardrobeSort.name => a.name.compareTo(b.name),
-                              };
-                              return result == 0
-                                  ? a.id.compareTo(b.id)
-                                  : result;
-                            });
-                            return Column(
-                              children: [
-                                Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    20,
-                                    0,
-                                    12,
-                                    4,
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Expanded(
-                                        child: Text(
-                                          '共 ${filtered.length} 件',
-                                          style: const TextStyle(
-                                            fontSize: 12,
-                                            color: Color(0xFF807B74),
-                                          ),
-                                        ),
-                                      ),
-                                      PopupMenuButton<_WardrobeSort>(
-                                        tooltip: '排序',
-                                        position: PopupMenuPosition.under,
-                                        offset: const Offset(0, 4),
-                                        color: const Color(0xFFFCFBF8),
-                                        surfaceTintColor: Colors.transparent,
-                                        shadowColor: const Color(0x24000000),
-                                        elevation: 4,
-                                        constraints:
-                                            const BoxConstraints.tightFor(
-                                              width: 148,
-                                            ),
-                                        menuPadding: const EdgeInsets.symmetric(
-                                          vertical: 4,
-                                        ),
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(
-                                            12,
-                                          ),
-                                          side: const BorderSide(
-                                            color: Color(0xFFE7E2DA),
-                                          ),
-                                        ),
-                                        onSelected: (value) =>
-                                            setState(() => _sort = value),
-                                        itemBuilder: (_) => [
-                                          for (final value
-                                              in _WardrobeSort.values)
-                                            PopupMenuItem(
-                                              value: value,
-                                              height: 44,
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                    horizontal: 14,
-                                                  ),
-                                              child: Row(
-                                                children: [
-                                                  Expanded(
-                                                    child: Text(
-                                                      _sortLabel(value),
-                                                      style: TextStyle(
-                                                        fontSize: 13,
-                                                        fontWeight:
-                                                            _sort == value
-                                                            ? FontWeight.w500
-                                                            : FontWeight.w400,
-                                                        color: const Color(
-                                                          0xFF514A42,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                  if (_sort == value)
-                                                    const Icon(
-                                                      Icons.check_rounded,
-                                                      size: 16,
-                                                      color: Color(0xFF805A3B),
-                                                    ),
-                                                ],
-                                              ),
-                                            ),
-                                        ],
-                                        child: Padding(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 8,
-                                            vertical: 4,
-                                          ),
-                                          child: Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Text(
-                                                _sortLabel(_sort),
-                                                style: const TextStyle(
-                                                  fontSize: 12,
-                                                  color: Color(0xFF68635D),
-                                                ),
-                                              ),
-                                              const SizedBox(width: 4),
-                                              const Icon(
-                                                Icons
-                                                    .keyboard_arrow_down_rounded,
-                                                size: 16,
-                                                color: Color(0xFF807B74),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                Expanded(
-                                  child: LayoutBuilder(
-                                    builder: (context, constraints) {
-                                      final columns = constraints.maxWidth < 280
-                                          ? 1
-                                          : (constraints.maxWidth / 200)
-                                                .floor()
-                                                .clamp(2, 6);
-                                      final cardWidth =
-                                          (constraints.maxWidth -
-                                              40 -
-                                              (columns - 1) * 12) /
-                                          columns;
-                                      // Square photos retain the original collection density.
-                                      final textScale = MediaQuery.textScalerOf(
-                                        context,
-                                      ).scale(1);
-                                      return GridView.builder(
-                                        padding: const EdgeInsets.fromLTRB(
-                                          20,
-                                          0,
-                                          20,
-                                          96,
-                                        ),
-                                        gridDelegate:
-                                            SliverGridDelegateWithFixedCrossAxisCount(
-                                              crossAxisCount: columns,
-                                              mainAxisSpacing: 20,
-                                              crossAxisSpacing: 12,
-                                              mainAxisExtent:
-                                                  cardWidth + 60 * textScale,
-                                            ),
-                                        itemCount: filtered.length,
-                                        itemBuilder: (context, index) {
-                                          final item = filtered[index];
-                                          final tagNames = tags
-                                              .where(
-                                                (tag) => item.tagIds.contains(
-                                                  tag.id,
-                                                ),
-                                              )
-                                              .map((tag) => tag.name)
-                                              .join(' · ');
-                                          return Material(
-                                            color: Colors.transparent,
-                                            child: InkWell(
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                              onTap: () {
-                                                _exitTagEditing();
-                                                Navigator.push(
-                                                  context,
-                                                  MaterialPageRoute(
-                                                    builder: (_) =>
-                                                        ItemDetailScreen(
-                                                          item: item,
-                                                        ),
-                                                  ),
-                                                );
-                                              },
-                                              child: Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                  AspectRatio(
-                                                    aspectRatio: 1,
-                                                    child: ItemImage(
-                                                      path: item.imagePath,
-                                                      radius: 12,
-                                                      fit: BoxFit.cover,
-                                                      backgroundColor:
-                                                          Colors.white,
-                                                    ),
-                                                  ),
-                                                  const SizedBox(height: 10),
-                                                  Text(
-                                                    item.name,
-                                                    maxLines: 1,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    style: const TextStyle(
-                                                      fontSize: 14,
-                                                      fontWeight:
-                                                          FontWeight.w600,
-                                                      color: Color(0xFF2D2C29),
-                                                    ),
-                                                  ),
-                                                  const SizedBox(height: 3),
-                                                  Text(
-                                                    tagNames.isEmpty
-                                                        ? '未分类'
-                                                        : tagNames,
-                                                    maxLines: 1,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    style: const TextStyle(
-                                                      fontSize: 12,
-                                                      color: Color(0xFF807B74),
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                      );
-                                    },
-                                  ),
-                                ),
-                              ],
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
+              _WardrobeLogo(),
+              SizedBox(width: 9),
+              Text(
+                '衣橱',
+                style: TextStyle(
+                  fontFamily: 'LXGWWenKai',
+                  fontSize: 22,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF5C3A20),
+                  letterSpacing: .4,
                 ),
               ),
             ],
-          );
-        },
+          ),
+          actions: [
+            if (!_selecting)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: TextButton.icon(
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFF6F6257),
+                    minimumSize: const Size(48, 44),
+                    textStyle: const TextStyle(fontSize: 13),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const WardrobeCanvasScreen(),
+                    ),
+                  ),
+                  icon: const Icon(
+                    Icons.dashboard_customize_outlined,
+                    size: 19,
+                  ),
+                  label: const Text('线上衣柜'),
+                ),
+              ),
+          ],
+        ),
+        bottomNavigationBar: _selecting
+            ? RecordSelectionBar(
+                count: _selectedRecords.length,
+                message: _bulkError,
+                busy: _bulkBusy,
+                onAll: () =>
+                    setState(() => _selectedRecords.addAll(_visibleRecords)),
+                onCancel: _cancelSelection,
+                onRemoveBackground: () =>
+                    _batchPhotos(BatchPhotoOperation.removeBackground),
+                onEditImages: () => _batchPhotos(BatchPhotoOperation.transform),
+                onMove: () => _bulkAction(true),
+                onDelete: () => _bulkAction(false),
+              )
+            : null,
+        floatingActionButton: _selecting || showsEmptyWardrobe
+            ? null
+            : FloatingActionButton.extended(
+                heroTag: 'wardrobe-add',
+                onPressed: _openNewItem,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                icon: const Icon(Icons.add, size: 20),
+                label: const Text('录入', style: TextStyle(fontSize: 14)),
+              ),
+        body: tagState.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (error, _) => Center(child: Text('标签加载失败：$error')),
+          data: (tags) {
+            final primary = tags.where((tag) => tag.isPrimary).toList();
+            final details = _primaryId == null
+                ? <WardrobeTag>[]
+                : tags.where((tag) => tag.parentId == _primaryId).toList();
+            return Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 4),
+                  child: Container(
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFCFBF8),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: const Color(0xFFE5E0D9),
+                        width: 1,
+                      ),
+                    ),
+                    child: Center(
+                      child: TextField(
+                        textAlignVertical: TextAlignVertical.center,
+                        style: const TextStyle(
+                          fontFamily: 'SourceHanSansCN',
+                          fontSize: 14,
+                          color: Color(0xFF382C20),
+                        ),
+                        decoration: const InputDecoration(
+                          filled: false,
+                          fillColor: Colors.transparent,
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          disabledBorder: InputBorder.none,
+                          isDense: true,
+                          prefixIcon: Icon(
+                            Icons.search_rounded,
+                            color: Color(0xFF796F65),
+                            size: 18,
+                          ),
+                          prefixIconConstraints: BoxConstraints(
+                            minWidth: 40,
+                            minHeight: 44,
+                          ),
+                          hintText: '搜索名称、标签、颜色',
+                          hintStyle: TextStyle(
+                            fontFamily: 'SourceHanSansCN',
+                            fontSize: 14,
+                            color: Color(0xFF796F65),
+                          ),
+                          contentPadding: EdgeInsets.symmetric(vertical: 11),
+                        ),
+                        readOnly: true,
+                        onTap: () {
+                          _exitTagEditing();
+                          _openSearch('');
+                        },
+                        onSubmitted: (query) {
+                          _exitTagEditing();
+                          _openSearch(query);
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+                _TagRow(
+                  tags: primary,
+                  selectedId: _primaryId,
+                  allLabel: '全部',
+                  onSelect: (id) => setState(() {
+                    _primaryId = id;
+                    _detailId = null;
+                  }),
+                  onAdd: () => _editTag(),
+                  onEdit: (tag) => _editTag(tag: tag),
+                  onDelete: _deleteTag,
+                  editing: _editingTags,
+                  onStartEditing: _enterTagEditing,
+                  onStartEditingTag: (_) => _enterTagEditing(),
+                  onReorder: (oldIndex, newIndex) =>
+                      _reorderTags(primary, oldIndex, newIndex),
+                ),
+                Expanded(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onTap: _editingTags
+                        ? () => setState(() => _editingTags = false)
+                        : null,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (_primaryId != null)
+                          _DetailTags(
+                            tags: details,
+                            selectedId: _detailId,
+                            onSelect: (id) => setState(() => _detailId = id),
+                            onAdd: () => _editTag(parentId: _primaryId),
+                            onEdit: (tag) => _editTag(tag: tag),
+                            onDelete: _deleteTag,
+                            editing: _editingTags,
+                            onStartEditing: _enterTagEditing,
+                            onStartEditingTag: (_) => _enterTagEditing(),
+                            onReorder: (oldIndex, newIndex) =>
+                                _reorderTags(details, oldIndex, newIndex),
+                          ),
+                        Expanded(
+                          child: itemState.when(
+                            loading: () => const Center(
+                              child: CircularProgressIndicator(),
+                            ),
+                            error: (error, _) => EmptyState(
+                              icon: Icons.error_outline,
+                              title: '衣橱加载失败',
+                              message: '$error',
+                            ),
+                            data: (items) {
+                              final visibleTagIds = _detailId != null
+                                  ? <String>{_detailId!}
+                                  : _primaryId == null
+                                  ? <String>{}
+                                  : <String>{
+                                      _primaryId!,
+                                      ...tags
+                                          .where(
+                                            (tag) => tag.parentId == _primaryId,
+                                          )
+                                          .map((tag) => tag.id),
+                                    };
+                              final filtered = items
+                                  .where(
+                                    (item) =>
+                                        (visibleTagIds.isEmpty ||
+                                            item.tagIds.any(
+                                              visibleTagIds.contains,
+                                            )) &&
+                                        true,
+                                  )
+                                  .toList();
+                              if (items.isEmpty) {
+                                return EmptyState(
+                                  icon: Icons.checkroom_outlined,
+                                  illustration: const _WardrobeIllustration(),
+                                  title: '把第一件衣服放进衣橱',
+                                  message: '拍照或从相册选择，建立你的单品记录。',
+                                  action: FilledButton.icon(
+                                    onPressed: _openNewItem,
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: const Color(0xFF805A3B),
+                                      foregroundColor: Colors.white,
+                                      minimumSize: const Size(0, 48),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 20,
+                                        vertical: 12,
+                                      ),
+                                      textStyle: const TextStyle(fontSize: 14),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(16),
+                                      ),
+                                    ),
+                                    icon: const Icon(Icons.add, size: 18),
+                                    label: const Text('添加第一件衣物'),
+                                  ),
+                                );
+                              }
+                              if (filtered.isEmpty) {
+                                return const EmptyState(
+                                  icon: Icons.search_off,
+                                  title: '这个分类还没有衣物',
+                                  message: '添加衣物时选择此分类，或切换分类查看。',
+                                );
+                              }
+                              _visibleRecords = filtered
+                                  .map((item) => item.id)
+                                  .toSet();
+                              filtered.sort((a, b) {
+                                final result = switch (_sort) {
+                                  _WardrobeSort.newest => b.createdAt.compareTo(
+                                    a.createdAt,
+                                  ),
+                                  _WardrobeSort.oldest => a.createdAt.compareTo(
+                                    b.createdAt,
+                                  ),
+                                  _WardrobeSort.name => a.name.compareTo(
+                                    b.name,
+                                  ),
+                                };
+                                return result == 0
+                                    ? a.id.compareTo(b.id)
+                                    : result;
+                              });
+                              return Column(
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      20,
+                                      0,
+                                      12,
+                                      4,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            '共 ${filtered.length} 件',
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: Color(0xFF807B74),
+                                            ),
+                                          ),
+                                        ),
+                                        PopupMenuButton<_WardrobeSort>(
+                                          tooltip: '排序',
+                                          position: PopupMenuPosition.under,
+                                          offset: const Offset(0, 4),
+                                          color: const Color(0xFFFCFBF8),
+                                          surfaceTintColor: Colors.transparent,
+                                          shadowColor: const Color(0x24000000),
+                                          elevation: 4,
+                                          constraints:
+                                              const BoxConstraints.tightFor(
+                                                width: 148,
+                                              ),
+                                          menuPadding:
+                                              const EdgeInsets.symmetric(
+                                                vertical: 4,
+                                              ),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                            side: const BorderSide(
+                                              color: Color(0xFFE7E2DA),
+                                            ),
+                                          ),
+                                          onSelected: (value) =>
+                                              setState(() => _sort = value),
+                                          itemBuilder: (_) => [
+                                            for (final value
+                                                in _WardrobeSort.values)
+                                              PopupMenuItem(
+                                                value: value,
+                                                height: 44,
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 14,
+                                                    ),
+                                                child: Row(
+                                                  children: [
+                                                    Expanded(
+                                                      child: Text(
+                                                        _sortLabel(value),
+                                                        style: TextStyle(
+                                                          fontSize: 13,
+                                                          fontWeight:
+                                                              _sort == value
+                                                              ? FontWeight.w500
+                                                              : FontWeight.w400,
+                                                          color: const Color(
+                                                            0xFF514A42,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    if (_sort == value)
+                                                      const Icon(
+                                                        Icons.check_rounded,
+                                                        size: 16,
+                                                        color: Color(
+                                                          0xFF805A3B,
+                                                        ),
+                                                      ),
+                                                  ],
+                                                ),
+                                              ),
+                                          ],
+                                          child: Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 8,
+                                              vertical: 4,
+                                            ),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Text(
+                                                  _sortLabel(_sort),
+                                                  style: const TextStyle(
+                                                    fontSize: 12,
+                                                    color: Color(0xFF68635D),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 4),
+                                                const Icon(
+                                                  Icons
+                                                      .keyboard_arrow_down_rounded,
+                                                  size: 16,
+                                                  color: Color(0xFF807B74),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: LayoutBuilder(
+                                      builder: (context, constraints) {
+                                        final columns =
+                                            constraints.maxWidth < 280
+                                            ? 1
+                                            : (constraints.maxWidth / 200)
+                                                  .floor()
+                                                  .clamp(2, 6);
+                                        final cardWidth =
+                                            (constraints.maxWidth -
+                                                40 -
+                                                (columns - 1) * 12) /
+                                            columns;
+                                        // Square photos retain the original collection density.
+                                        final textScale =
+                                            MediaQuery.textScalerOf(
+                                              context,
+                                            ).scale(1);
+                                        return GridView.builder(
+                                          padding: const EdgeInsets.fromLTRB(
+                                            20,
+                                            0,
+                                            20,
+                                            96,
+                                          ),
+                                          gridDelegate:
+                                              SliverGridDelegateWithFixedCrossAxisCount(
+                                                crossAxisCount: columns,
+                                                mainAxisSpacing: 20,
+                                                crossAxisSpacing: 12,
+                                                mainAxisExtent:
+                                                    cardWidth + 60 * textScale,
+                                              ),
+                                          itemCount: filtered.length,
+                                          itemBuilder: (context, index) {
+                                            final item = filtered[index];
+                                            final tagNames = tags
+                                                .where(
+                                                  (tag) => item.tagIds.contains(
+                                                    tag.id,
+                                                  ),
+                                                )
+                                                .map((tag) => tag.name)
+                                                .join(' · ');
+                                            return SelectableRecord(
+                                              selecting: _selecting,
+                                              selected: _selectedRecords
+                                                  .contains(item.id),
+                                              onEnter: () =>
+                                                  _toggleRecord(item.id),
+                                              onToggle: () =>
+                                                  _toggleRecord(item.id),
+                                              child: Material(
+                                                color: Colors.transparent,
+                                                child: InkWell(
+                                                  borderRadius:
+                                                      BorderRadius.circular(12),
+                                                  onTap: () {
+                                                    _exitTagEditing();
+                                                    Navigator.push(
+                                                      context,
+                                                      MaterialPageRoute(
+                                                        builder: (_) =>
+                                                            ItemDetailScreen(
+                                                              item: item,
+                                                            ),
+                                                      ),
+                                                    );
+                                                  },
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    children: [
+                                                      AspectRatio(
+                                                        aspectRatio: 1,
+                                                        child: ItemImage(
+                                                          path: item.imagePath,
+                                                          radius: 12,
+                                                          fit: BoxFit.cover,
+                                                          backgroundColor:
+                                                              Colors.white,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(
+                                                        height: 10,
+                                                      ),
+                                                      Text(
+                                                        item.name,
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        style: const TextStyle(
+                                                          fontSize: 14,
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          color: Color(
+                                                            0xFF2D2C29,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      const SizedBox(height: 3),
+                                                      Text(
+                                                        tagNames.isEmpty
+                                                            ? '未分类'
+                                                            : tagNames,
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        style: const TextStyle(
+                                                          fontSize: 12,
+                                                          color: Color(
+                                                            0xFF807B74,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ),
+                                            );
+                                          },
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -557,11 +728,39 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
     _WardrobeSort.name => '名称排序',
   };
 
-  void _openNewItem() {
+  Future<void> _openNewItem() async {
     _exitTagEditing();
+    final batch = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.add_a_photo_outlined),
+              title: const Text('录入单品'),
+              subtitle: const Text('一件衣物，可添加多张照片'),
+              onTap: () => Navigator.pop(context, false),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('批量录入'),
+              subtitle: const Text('一张照片对应一件衣物，也可继续上次草稿'),
+              onTap: () => Navigator.pop(context, true),
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+    if (batch == null || !mounted) return;
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const ItemFormScreen()),
+      MaterialPageRoute(
+        builder: (_) =>
+            batch ? const BatchImportScreen() : const ItemFormScreen(),
+      ),
     );
   }
 
@@ -597,36 +796,12 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
   }
 
   Future<void> _editTag({WardrobeTag? tag, String? parentId}) async {
-    final name = await showDialog<String>(
-      context: context,
-      builder: (_) => _TagNameDialog(tag: tag),
+    await showCategoryEditor(
+      context,
+      outfits: false,
+      tag: tag,
+      parentId: parentId,
     );
-    if (!mounted || name == null) return;
-    if (name.isEmpty) {
-      if (tag == null) return;
-      await _deleteTag(tag);
-      return;
-    }
-    try {
-      final existingTags = await ref.read(wardrobeTagsProvider.future);
-      await ref
-          .read(wardrobeTagsProvider.notifier)
-          .save(
-            WardrobeTag(
-              syncVersion: tag?.syncVersion ?? 0,
-              id: tag?.id ?? const Uuid().v4(),
-              name: name,
-              parentId: tag?.parentId ?? parentId,
-              sortOrder:
-                  tag?.sortOrder ??
-                  nextTagSortOrder(existingTags, parentId: parentId),
-            ),
-          );
-    } on TagValidationException catch (error) {
-      _showMessage(error.message);
-    } catch (error) {
-      _showMessage('标签保存失败：$error');
-    }
   }
 
   Future<void> _deleteTag(WardrobeTag tag) async {
@@ -664,48 +839,6 @@ class _WardrobeScreenState extends ConsumerState<WardrobeScreen> {
       }
     }
   }
-}
-
-class _TagNameDialog extends StatefulWidget {
-  const _TagNameDialog({this.tag});
-
-  final WardrobeTag? tag;
-
-  @override
-  State<_TagNameDialog> createState() => _TagNameDialogState();
-}
-
-class _TagNameDialogState extends State<_TagNameDialog> {
-  late final _text = TextEditingController(text: widget.tag?.name ?? '');
-
-  @override
-  void dispose() {
-    _text.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: Text(widget.tag == null ? '添加标签' : '编辑标签'),
-    content: TextField(
-      controller: _text,
-      autofocus: true,
-      maxLength: WardrobeTag.maxNameLength,
-      decoration: InputDecoration(
-        hintText: '标签名称（最多 ${WardrobeTag.maxNameLength} 个字符）',
-      ),
-    ),
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('取消'),
-      ),
-      FilledButton(
-        onPressed: () => Navigator.pop(context, _text.text.trim()),
-        child: const Text('保存'),
-      ),
-    ],
-  );
 }
 
 class _WardrobeLogo extends StatelessWidget {
@@ -963,93 +1096,65 @@ class _DetailTags extends StatelessWidget {
         color: Theme.of(context).colorScheme.surfaceContainerLowest,
         borderRadius: BorderRadius.circular(16),
       ),
-      child: editing || tags.isNotEmpty
-          ? Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: _ManagedChip(
-                    label: '全部',
-                    selected: selectedId == null,
-                    vertical: true,
-                    onTap: () => onSelect(null),
-                  ),
-                ),
-                Expanded(
-                  child: ReorderableListView.builder(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    itemCount: tags.length,
-                    onReorderItem: onReorder,
-                    onReorderStart: (_) => onStartEditing(),
-                    buildDefaultDragHandles: false,
-                    proxyDecorator: (child, index, animation) => Material(
-                      color: Colors.transparent,
-                      elevation: 0,
-                      child: IgnorePointer(child: child),
-                    ),
-                    itemBuilder: (context, index) {
-                      final tag = tags[index];
-                      return ReorderableDelayedDragStartListener(
-                        key: ValueKey(tag.id),
-                        index: index,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 7,
-                            vertical: 3,
-                          ),
-                          child: _ManagedChip(
-                            label: tag.name,
-                            selected: selectedId == tag.id,
-                            vertical: true,
-                            editing: editing,
-                            onTap: () =>
-                                editing ? onEdit(tag) : onSelect(tag.id),
-                            onDelete: () => onDelete(tag),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-                IgnorePointer(
-                  ignoring: editing,
-                  child: Opacity(
-                    opacity: editing ? 0 : 1,
-                    child: IconButton(
-                      onPressed: onAdd,
-                      icon: const Icon(Icons.add, size: 20),
-                      tooltip: '添加细分标签',
-                    ),
-                  ),
-                ),
-              ],
-            )
-          : ListView(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              children: [
-                _ManagedChip(
-                  label: '全部',
-                  selected: selectedId == null,
-                  vertical: true,
-                  onTap: () => onSelect(null),
-                ),
-                ...tags.map(
-                  (tag) => _ManagedChip(
-                    label: tag.name,
-                    selected: selectedId == tag.id,
-                    vertical: true,
-                    onTap: () => onSelect(tag.id),
-                    onLongPress: () => onStartEditingTag(tag),
-                    onDelete: () => onDelete(tag),
-                  ),
-                ),
-                IconButton(
-                  onPressed: onAdd,
-                  icon: const Icon(Icons.add, size: 20),
-                  tooltip: '添加细分标签',
-                ),
-              ],
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: _ManagedChip(
+              label: '全部',
+              selected: selectedId == null,
+              vertical: true,
+              onTap: () => onSelect(null),
             ),
+          ),
+          Expanded(
+            child: ReorderableListView.builder(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              footer: IgnorePointer(
+                ignoring: editing,
+                child: Opacity(
+                  opacity: editing ? 0 : 1,
+                  child: IconButton(
+                    onPressed: onAdd,
+                    icon: const Icon(Icons.add, size: 20),
+                    tooltip: '添加细分标签',
+                  ),
+                ),
+              ),
+              itemCount: tags.length,
+              onReorderItem: onReorder,
+              onReorderStart: (_) => onStartEditing(),
+              buildDefaultDragHandles: false,
+              proxyDecorator: (child, index, animation) => Material(
+                color: Colors.transparent,
+                elevation: 0,
+                child: IgnorePointer(child: child),
+              ),
+              itemBuilder: (context, index) {
+                final tag = tags[index];
+                return ReorderableDelayedDragStartListener(
+                  key: ValueKey(tag.id),
+                  index: index,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 3,
+                    ),
+                    child: _ManagedChip(
+                      label: tag.name,
+                      selected: selectedId == tag.id,
+                      vertical: true,
+                      editing: editing,
+                      onTap: () => editing ? onEdit(tag) : onSelect(tag.id),
+                      onDelete: () => onDelete(tag),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
     ),
   );
 }

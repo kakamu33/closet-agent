@@ -1,3 +1,4 @@
+import '../domain/item_details.dart';
 import '../../../core/sync/cloud_sync_protocol.dart';
 import '../../../core/sync/sync_collection.dart';
 import '../../../core/cloudbase/cloudbase_client.dart';
@@ -59,6 +60,7 @@ class CloudBaseWardrobeRepository {
       throw const CloudBaseException('云端衣物缺少必要字段');
     }
     return WardrobeItem(
+      details: ItemDetails.parse(value['details_json']),
       id: _requiredString(value, 'id'),
       syncVersion: (value['sync_version'] as num?)?.toInt() ?? 0,
       name: _requiredString(value, 'name'),

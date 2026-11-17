@@ -5,26 +5,27 @@ import '../dependencies.dart';
 import '../sync/sync_providers.dart';
 import '../../features/auth/application/auth_controller.dart';
 
-final _imageBytesProvider = FutureProvider.autoDispose
-    .family<Uint8List, String>((ref, path) async {
-      ref.watch(authSessionProvider.select((session) => session.value?.id));
-      final media = ref.watch(cloudMediaStoreProvider);
-      var token = '';
-      if (path.startsWith('storage://')) {
-        try {
-          return await media.read(path, '');
-        } catch (_) {
-          /* Cache miss: authenticate below. */
-        }
-        try {
-          token =
-              await ref.read(authRepositoryProvider).currentAccessToken() ?? '';
-        } catch (_) {
-          /* An offline cached image does not need a fresh token. */
-        }
+final imageBytesProvider = FutureProvider.autoDispose.family<Uint8List, String>(
+  (ref, path) async {
+    ref.watch(authSessionProvider.select((session) => session.value?.id));
+    final media = ref.watch(cloudMediaStoreProvider);
+    var token = '';
+    if (path.startsWith('storage://')) {
+      try {
+        return await media.read(path, '');
+      } catch (_) {
+        /* Cache miss: authenticate below. */
       }
-      return media.read(path, token);
-    });
+      try {
+        token =
+            await ref.read(authRepositoryProvider).currentAccessToken() ?? '';
+      } catch (_) {
+        /* An offline cached image does not need a fresh token. */
+      }
+    }
+    return media.read(path, token);
+  },
+);
 
 class ItemImage extends ConsumerWidget {
   const ItemImage({
@@ -58,7 +59,7 @@ class ItemImage extends ConsumerWidget {
       child: path == null
           ? _placeholder(Icons.checkroom)
           : ref
-                .watch(_imageBytesProvider(path!))
+                .watch(imageBytesProvider(path!))
                 .when(
                   data: (bytes) => Image.memory(
                     bytes,

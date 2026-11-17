@@ -17,10 +17,13 @@ class CloudBaseException implements Exception {
 }
 
 class CloudBaseClient {
-  CloudBaseClient({http.Client? httpClient})
-    : _httpClient = httpClient ?? http.Client();
+  CloudBaseClient({
+    http.Client? httpClient,
+    this.requestTimeout = const Duration(seconds: 25),
+  }) : _httpClient = httpClient ?? http.Client();
 
   final http.Client _httpClient;
+  final Duration requestTimeout;
   void close() => _httpClient.close();
 
   Future<Map<String, Object?>> requestObject(
@@ -97,7 +100,7 @@ class CloudBaseClient {
       return await (() async {
         final streamed = await _httpClient.send(abortable);
         return http.Response.fromStream(streamed);
-      })().timeout(const Duration(seconds: 25));
+      })().timeout(requestTimeout);
     } on TimeoutException {
       if (!cancel.isCompleted) cancel.complete();
       throw const CloudBaseException('网络请求超时，数据已保留，可稍后重试');

@@ -1,3 +1,4 @@
+import 'item_details.dart';
 import 'dart:convert';
 
 import '../../../core/time_utils.dart';
@@ -16,8 +17,10 @@ class WardrobeItem {
     this.currency = 'CNY',
     this.price,
     this.syncVersion = 0,
+    this.details = const ItemDetails(),
   });
 
+  final ItemDetails details;
   final int syncVersion;
   final String id;
   final String name;
@@ -32,11 +35,23 @@ class WardrobeItem {
   final DateTime createdAt;
   final DateTime updatedAt;
 
+  Object? attribute(String key) => switch (key) {
+    'status' => details.status,
+    'seasons' => details.seasons,
+    'brand' => brand,
+    'color' => color,
+    'price' => price,
+    'notes' => notes,
+    _ => details.values[key],
+  };
+
   WardrobeItem copyWith({
+    ItemDetails? details,
     String? name,
     List<String>? imagePaths,
     DateTime? updatedAt,
   }) => WardrobeItem(
+    details: details ?? this.details,
     id: id,
     syncVersion: syncVersion,
     name: name ?? this.name,
@@ -52,6 +67,7 @@ class WardrobeItem {
   );
 
   Map<String, Object?> toMap() => {
+    'details_json': details.encode(),
     'id': id,
     'sync_version': syncVersion,
     'name': name,
@@ -78,6 +94,7 @@ class WardrobeItem {
         : (jsonDecode(rawTags) as List).cast<String>();
     final createdAt = parseTimestamp(map['created_at'])!;
     return WardrobeItem(
+      details: ItemDetails.parse(map['details_json']),
       id: map['id']! as String,
       syncVersion: (map['sync_version'] as num?)?.toInt() ?? 0,
       name: map['name']! as String,
@@ -92,4 +109,22 @@ class WardrobeItem {
       updatedAt: parseTimestamp(map['updated_at']) ?? createdAt,
     );
   }
+}
+
+/// Merge only photo fields; all independently edited attributes stay intact.
+WardrobeItem replaceItemPhotos(
+  WardrobeItem current,
+  WardrobeItem before,
+  WardrobeItem after,
+) {
+  final paths = jsonEncode(current.imagePaths);
+  if (paths != jsonEncode(before.imagePaths) &&
+      paths != jsonEncode(after.imagePaths)) {
+    throw StateError('图片已发生变化，请关闭后重新选择单品');
+  }
+  return current.copyWith(
+    imagePaths: after.imagePaths,
+    details: current.details.copyWith(originals: after.details.originals),
+    updatedAt: DateTime.now(),
+  );
 }

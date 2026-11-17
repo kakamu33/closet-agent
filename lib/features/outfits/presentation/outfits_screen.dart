@@ -2,9 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:uuid/uuid.dart';
 
 import '../../../core/providers.dart';
+import '../../../core/widgets/category_picker.dart';
+import '../../../core/widgets/record_selection.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/item_image.dart';
 import '../../search/presentation/search_results_screen.dart';
@@ -13,6 +14,7 @@ import '../../wardrobe/domain/wardrobe_tag.dart';
 import '../domain/outfit.dart';
 import 'outfit_detail_screen.dart';
 import 'outfit_form_screen.dart';
+import '../../assistant/presentation/assistant_screen.dart';
 
 class OutfitsScreen extends ConsumerStatefulWidget {
   const OutfitsScreen({super.key});
@@ -24,6 +26,77 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
   String? _primaryId;
   String? _detailId;
   bool _editingTags = false;
+  bool _selecting = false;
+  bool _bulkBusy = false;
+  String? _bulkError;
+  final _selectedRecords = <String>{};
+  Set<String> _visibleRecords = {};
+
+  void _cancelSelection() => setState(() {
+    _selecting = false;
+    _selectedRecords.clear();
+    _bulkError = null;
+  });
+  void _toggleRecord(String id) {
+    if (_bulkBusy) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..removeCurrentSnackBar();
+    setState(() {
+      _bulkError = null;
+      _selecting = true;
+      _editingTags = false;
+      _selectedRecords.contains(id)
+          ? _selectedRecords.remove(id)
+          : _selectedRecords.add(id);
+    });
+  }
+
+  Future<void> _bulkAction(bool moving) async {
+    if (_bulkBusy || _selectedRecords.isEmpty) return;
+    final owner = ref.read(authSessionProvider).value?.id;
+    final controller = ref.read(outfitsProvider.notifier);
+    final ids = Set<String>.of(_selectedRecords);
+    List<String>? target;
+    if (moving) {
+      target = await showCategoryPicker(
+        context,
+        [],
+        outfits: true,
+        moving: true,
+      );
+      if (target == null) return;
+    } else if (!await confirmRecordDeletion(
+      context,
+      ids.length,
+      outfits: true,
+    )) {
+      return;
+    }
+    if (!mounted || ref.read(authSessionProvider).value?.id != owner) return;
+    setState(() {
+      _bulkBusy = true;
+      _bulkError = null;
+    });
+    try {
+      if (moving) {
+        await controller.moveMany(ids, target!);
+      } else {
+        await controller.removeMany(ids);
+      }
+      if (mounted && ref.read(authSessionProvider).value?.id == owner) {
+        _cancelSelection();
+      }
+    } catch (error) {
+      if (mounted && ref.read(authSessionProvider).value?.id == owner) {
+        setState(() => _bulkError = '部分操作未完成，可重试：$error');
+      }
+    } finally {
+      if (mounted && ref.read(authSessionProvider).value?.id == owner) {
+        setState(() => _bulkBusy = false);
+      }
+    }
+  }
 
   @override
   void initState() {
@@ -38,8 +111,12 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
   }
 
   void _exitTagEditingWhenInactive() {
-    if (shellTabIndex.value != 1 && _editingTags && mounted) {
-      setState(() => _editingTags = false);
+    if (shellTabIndex.value != 1 && (_editingTags || _selecting) && mounted) {
+      setState(() {
+        _editingTags = false;
+        _selecting = false;
+        _selectedRecords.clear();
+      });
     }
   }
 
@@ -61,6 +138,19 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(authSessionProvider.select((session) => session.value?.id), (
+      old,
+      current,
+    ) {
+      if (old != current) {
+        setState(() {
+          _selecting = false;
+          _bulkBusy = false;
+          _selectedRecords.clear();
+        });
+      }
+    });
+
     final outfits = ref.watch(outfitsProvider);
     final tags = ref.watch(outfitTagsProvider);
     final showsEmpty =
@@ -70,257 +160,301 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
         outfits.asData?.value.isEmpty == true &&
         !outfits.isLoading &&
         !outfits.hasError;
-    return Scaffold(
-      appBar: AppBar(
-        titleSpacing: 18,
-        title: const Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _OutfitLogo(),
-            SizedBox(width: 9),
-            Text(
-              '搭配',
-              style: TextStyle(
-                fontFamily: 'LXGWWenKai',
-                fontSize: 22,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF5C3A20),
-                letterSpacing: .4,
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: TextButton.icon(
-              onPressed: _openStylistPreview,
-              style: TextButton.styleFrom(
-                foregroundColor: const Color(0xFF6F6257),
-                minimumSize: const Size(48, 44),
-                textStyle: const TextStyle(fontSize: 13),
-              ),
-              icon: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                decoration: BoxDecoration(
-                  border: Border.all(color: const Color(0xFFCDBDAA)),
-                  borderRadius: BorderRadius.circular(5),
-                ),
-                child: const Text(
-                  'AI',
-                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600),
-                ),
-              ),
-              label: const Text('帮我搭配'),
-            ),
-          ),
-        ],
-      ),
-      floatingActionButton: showsEmpty
-          ? null
-          : FloatingActionButton.extended(
-              heroTag: 'outfit-add',
-              onPressed: _openNewOutfit,
-              elevation: 0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              icon: const Icon(Icons.add, size: 20),
-              label: const Text('新搭配', style: TextStyle(fontSize: 14)),
-            ),
-      body: tags.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (error, _) => Center(child: Text('标签加载失败：$error')),
-        data: (allTags) {
-          final primary = allTags.where((tag) => tag.isPrimary).toList();
-          final details = _primaryId == null
-              ? <WardrobeTag>[]
-              : allTags.where((tag) => tag.parentId == _primaryId).toList();
-          return Column(
+    return PopScope(
+      canPop: !_selecting,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _selecting && !_bulkBusy) _cancelSelection();
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          titleSpacing: 18,
+          title: const Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 4, 20, 4),
-                child: Container(
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFCFBF8),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: const Color(0xFFE5E0D9),
-                      width: 1,
-                    ),
-                  ),
-                  child: Center(
-                    child: TextField(
-                      textAlignVertical: TextAlignVertical.center,
-                      style: const TextStyle(
-                        fontFamily: 'SourceHanSansCN',
-                        fontSize: 14,
-                        color: Color(0xFF382C20),
-                      ),
-                      decoration: const InputDecoration(
-                        filled: false,
-                        fillColor: Colors.transparent,
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                        disabledBorder: InputBorder.none,
-                        isDense: true,
-                        prefixIcon: Icon(
-                          Icons.search_rounded,
-                          color: Color(0xFF796F65),
-                          size: 18,
-                        ),
-                        prefixIconConstraints: BoxConstraints(
-                          minWidth: 40,
-                          minHeight: 44,
-                        ),
-                        hintText: '搜索搭配名称、标签',
-                        hintStyle: TextStyle(
-                          fontFamily: 'SourceHanSansCN',
-                          fontSize: 14,
-                          color: Color(0xFF796F65),
-                        ),
-                        contentPadding: EdgeInsets.symmetric(vertical: 11),
-                      ),
-                      readOnly: true,
-                      onTap: () {
-                        _exitTagEditing();
-                        _openSearch('');
-                      },
-                      onSubmitted: (query) {
-                        _exitTagEditing();
-                        _openSearch(query);
-                      },
-                    ),
-                  ),
-                ),
-              ),
-              _TagBar(
-                tags: primary,
-                selectedId: _primaryId,
-                onSelect: (id) => setState(() {
-                  _primaryId = id;
-                  _detailId = null;
-                }),
-                onAdd: () => _editTag(),
-                onEdit: (tag) => _editTag(tag: tag),
-                onDelete: _deleteTag,
-                editing: _editingTags,
-                onStartEditing: _enterTagEditing,
-                onStartEditingTag: (_) => _enterTagEditing(),
-                onReorder: (oldIndex, newIndex) =>
-                    _reorderTags(primary, oldIndex, newIndex),
-              ),
-
-              Expanded(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onTap: _editingTags
-                      ? () => setState(() => _editingTags = false)
-                      : null,
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (_primaryId != null)
-                        _DetailTagBar(
-                          tags: details,
-                          selectedId: _detailId,
-                          onSelect: (id) => setState(() => _detailId = id),
-                          onAdd: () => _editTag(parentId: _primaryId),
-                          onEdit: (tag) => _editTag(tag: tag),
-                          onDelete: _deleteTag,
-                          editing: _editingTags,
-                          onStartEditing: _enterTagEditing,
-                          onStartEditingTag: (_) => _enterTagEditing(),
-                          onReorder: (oldIndex, newIndex) =>
-                              _reorderTags(details, oldIndex, newIndex),
-                        ),
-                      Expanded(
-                        child: outfits.when(
-                          loading: () =>
-                              const Center(child: CircularProgressIndicator()),
-                          error: (error, _) => EmptyState(
-                            icon: Icons.error_outline,
-                            title: '搭配加载失败',
-                            message: '$error',
-                          ),
-                          data: (all) {
-                            final visible = _detailId != null
-                                ? <String>{_detailId!}
-                                : _primaryId == null
-                                ? <String>{}
-                                : <String>{
-                                    _primaryId!,
-                                    ...allTags
-                                        .where(
-                                          (tag) => tag.parentId == _primaryId,
-                                        )
-                                        .map((tag) => tag.id),
-                                  };
-                            final shown = all.where((outfit) {
-                              return visible.isEmpty ||
-                                  outfit.tags.any(visible.contains);
-                            }).toList();
-                            if (all.isEmpty) {
-                              return EmptyState(
-                                icon: Icons.view_quilt_outlined,
-                                title: '留下你喜欢的穿搭',
-                                message: '组合衣橱里的单品，保存成一套随时可用的搭配。',
-                                action: FilledButton.icon(
-                                  onPressed: _openNewOutfit,
-                                  style: FilledButton.styleFrom(
-                                    backgroundColor: const Color(0xFF805A3B),
-                                    foregroundColor: Colors.white,
-                                    minimumSize: const Size(0, 48),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 20,
-                                      vertical: 12,
-                                    ),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                    textStyle: const TextStyle(fontSize: 14),
-                                  ),
-                                  icon: const Icon(Icons.add, size: 18),
-                                  label: const Text('创建第一套搭配'),
-                                ),
-                              );
-                            }
-                            if (shown.isEmpty) {
-                              return const EmptyState(
-                                icon: Icons.filter_alt_off,
-                                title: '没有符合条件的搭配',
-                                message: '切换分类查看，或创建一套新的搭配。',
-                              );
-                            }
-                            return ListView.separated(
-                              padding: const EdgeInsets.fromLTRB(20, 4, 20, 96),
-                              itemCount: shown.length,
-                              separatorBuilder: (_, _) =>
-                                  const SizedBox(height: 12),
-                              itemBuilder: (_, index) => _OutfitCard(
-                                onTap: _exitTagEditing,
-                                outfit: shown[index],
-                                tagNames: allTags
-                                    .where(
-                                      (tag) =>
-                                          shown[index].tags.contains(tag.id),
-                                    )
-                                    .map((tag) => tag.name)
-                                    .toList(),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
+              _OutfitLogo(),
+              SizedBox(width: 9),
+              Text(
+                '搭配',
+                style: TextStyle(
+                  fontFamily: 'LXGWWenKai',
+                  fontSize: 22,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF5C3A20),
+                  letterSpacing: .4,
                 ),
               ),
             ],
-          );
-        },
+          ),
+          actions: [
+            if (!_selecting)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: TextButton.icon(
+                  onPressed: _openStylistPreview,
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFF6F6257),
+                    minimumSize: const Size(48, 44),
+                    textStyle: const TextStyle(fontSize: 13),
+                  ),
+                  icon: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 5,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: const Color(0xFFCDBDAA)),
+                      borderRadius: BorderRadius.circular(5),
+                    ),
+                    child: const Text(
+                      'AI',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  label: const Text('帮我搭配'),
+                ),
+              ),
+          ],
+        ),
+        bottomNavigationBar: _selecting
+            ? RecordSelectionBar(
+                count: _selectedRecords.length,
+                message: _bulkError,
+                busy: _bulkBusy,
+                onAll: () =>
+                    setState(() => _selectedRecords.addAll(_visibleRecords)),
+                onCancel: _cancelSelection,
+                onMove: () => _bulkAction(true),
+                onDelete: () => _bulkAction(false),
+              )
+            : null,
+        floatingActionButton: _selecting || showsEmpty
+            ? null
+            : FloatingActionButton.extended(
+                heroTag: 'outfit-add',
+                onPressed: _openNewOutfit,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                icon: const Icon(Icons.add, size: 20),
+                label: const Text('新搭配', style: TextStyle(fontSize: 14)),
+              ),
+        body: tags.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (error, _) => Center(child: Text('标签加载失败：$error')),
+          data: (allTags) {
+            final primary = allTags.where((tag) => tag.isPrimary).toList();
+            final details = _primaryId == null
+                ? <WardrobeTag>[]
+                : allTags.where((tag) => tag.parentId == _primaryId).toList();
+            return Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 4),
+                  child: Container(
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFCFBF8),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: const Color(0xFFE5E0D9),
+                        width: 1,
+                      ),
+                    ),
+                    child: Center(
+                      child: TextField(
+                        textAlignVertical: TextAlignVertical.center,
+                        style: const TextStyle(
+                          fontFamily: 'SourceHanSansCN',
+                          fontSize: 14,
+                          color: Color(0xFF382C20),
+                        ),
+                        decoration: const InputDecoration(
+                          filled: false,
+                          fillColor: Colors.transparent,
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          disabledBorder: InputBorder.none,
+                          isDense: true,
+                          prefixIcon: Icon(
+                            Icons.search_rounded,
+                            color: Color(0xFF796F65),
+                            size: 18,
+                          ),
+                          prefixIconConstraints: BoxConstraints(
+                            minWidth: 40,
+                            minHeight: 44,
+                          ),
+                          hintText: '搜索搭配名称、标签',
+                          hintStyle: TextStyle(
+                            fontFamily: 'SourceHanSansCN',
+                            fontSize: 14,
+                            color: Color(0xFF796F65),
+                          ),
+                          contentPadding: EdgeInsets.symmetric(vertical: 11),
+                        ),
+                        readOnly: true,
+                        onTap: () {
+                          _exitTagEditing();
+                          _openSearch('');
+                        },
+                        onSubmitted: (query) {
+                          _exitTagEditing();
+                          _openSearch(query);
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+                _TagBar(
+                  tags: primary,
+                  selectedId: _primaryId,
+                  onSelect: (id) => setState(() {
+                    _primaryId = id;
+                    _detailId = null;
+                  }),
+                  onAdd: () => _editTag(),
+                  onEdit: (tag) => _editTag(tag: tag),
+                  onDelete: _deleteTag,
+                  editing: _editingTags,
+                  onStartEditing: _enterTagEditing,
+                  onStartEditingTag: (_) => _enterTagEditing(),
+                  onReorder: (oldIndex, newIndex) =>
+                      _reorderTags(primary, oldIndex, newIndex),
+                ),
+
+                Expanded(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onTap: _editingTags
+                        ? () => setState(() => _editingTags = false)
+                        : null,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (_primaryId != null)
+                          _DetailTagBar(
+                            tags: details,
+                            selectedId: _detailId,
+                            onSelect: (id) => setState(() => _detailId = id),
+                            onAdd: () => _editTag(parentId: _primaryId),
+                            onEdit: (tag) => _editTag(tag: tag),
+                            onDelete: _deleteTag,
+                            editing: _editingTags,
+                            onStartEditing: _enterTagEditing,
+                            onStartEditingTag: (_) => _enterTagEditing(),
+                            onReorder: (oldIndex, newIndex) =>
+                                _reorderTags(details, oldIndex, newIndex),
+                          ),
+                        Expanded(
+                          child: outfits.when(
+                            loading: () => const Center(
+                              child: CircularProgressIndicator(),
+                            ),
+                            error: (error, _) => EmptyState(
+                              icon: Icons.error_outline,
+                              title: '搭配加载失败',
+                              message: '$error',
+                            ),
+                            data: (all) {
+                              final visible = _detailId != null
+                                  ? <String>{_detailId!}
+                                  : _primaryId == null
+                                  ? <String>{}
+                                  : <String>{
+                                      _primaryId!,
+                                      ...allTags
+                                          .where(
+                                            (tag) => tag.parentId == _primaryId,
+                                          )
+                                          .map((tag) => tag.id),
+                                    };
+                              final shown = all.where((outfit) {
+                                return visible.isEmpty ||
+                                    outfit.tags.any(visible.contains);
+                              }).toList();
+                              _visibleRecords = shown
+                                  .map((outfit) => outfit.id)
+                                  .toSet();
+                              if (all.isEmpty) {
+                                return EmptyState(
+                                  icon: Icons.view_quilt_outlined,
+                                  title: '留下你喜欢的穿搭',
+                                  message: '组合衣橱里的单品，保存成一套随时可用的搭配。',
+                                  action: FilledButton.icon(
+                                    onPressed: _openNewOutfit,
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: const Color(0xFF805A3B),
+                                      foregroundColor: Colors.white,
+                                      minimumSize: const Size(0, 48),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 20,
+                                        vertical: 12,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(16),
+                                      ),
+                                      textStyle: const TextStyle(fontSize: 14),
+                                    ),
+                                    icon: const Icon(Icons.add, size: 18),
+                                    label: const Text('创建第一套搭配'),
+                                  ),
+                                );
+                              }
+                              if (shown.isEmpty) {
+                                return const EmptyState(
+                                  icon: Icons.filter_alt_off,
+                                  title: '没有符合条件的搭配',
+                                  message: '切换分类查看，或创建一套新的搭配。',
+                                );
+                              }
+                              return ListView.separated(
+                                padding: const EdgeInsets.fromLTRB(
+                                  20,
+                                  4,
+                                  20,
+                                  96,
+                                ),
+                                itemCount: shown.length,
+                                separatorBuilder: (_, _) =>
+                                    const SizedBox(height: 12),
+                                itemBuilder: (_, index) => SelectableRecord(
+                                  selecting: _selecting,
+                                  selected: _selectedRecords.contains(
+                                    shown[index].id,
+                                  ),
+                                  onEnter: () => _toggleRecord(shown[index].id),
+                                  onToggle: () =>
+                                      _toggleRecord(shown[index].id),
+                                  child: _OutfitCard(
+                                    onTap: _exitTagEditing,
+                                    outfit: shown[index],
+                                    tagNames: allTags
+                                        .where(
+                                          (tag) => shown[index].tags.contains(
+                                            tag.id,
+                                          ),
+                                        )
+                                        .map((tag) => tag.name)
+                                        .toList(),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -335,76 +469,9 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
 
   void _openStylistPreview() {
     _exitTagEditing();
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      backgroundColor: const Color(0xFFFCFBF8),
-      constraints: const BoxConstraints(maxWidth: 520),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                '帮我搭配',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                '从你的衣橱出发，找到适合这一天的穿搭。',
-                style: TextStyle(
-                  fontSize: 14,
-                  height: 1.6,
-                  color: Color(0xFF71675E),
-                ),
-              ),
-              const SizedBox(height: 24),
-              const _StylistStep(
-                number: '01',
-                title: '说说今天怎么穿',
-                description: '告诉 AI 场合、风格和想穿的单品。',
-              ),
-              const _StylistStep(
-                number: '02',
-                title: '从已有衣物中搭配',
-                description: '检索你的衣橱，组合单品，也可以按反馈调整。',
-              ),
-              const _StylistStep(
-                number: '03',
-                title: '满意后再保存',
-                description: '只有你确认后，才会录入这套搭配。',
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                '即将推出',
-                style: TextStyle(fontSize: 12, color: Color(0xFF817A72)),
-              ),
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton(
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF6F6257),
-                    side: const BorderSide(color: Color(0xFFDDD2C4)),
-                    minimumSize: const Size(0, 44),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('返回我的搭配'),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const AssistantScreen()),
     );
   }
 
@@ -440,55 +507,12 @@ class _OutfitsScreenState extends ConsumerState<OutfitsScreen> {
   }
 
   Future<void> _editTag({WardrobeTag? tag, String? parentId}) async {
-    final text = TextEditingController(text: tag?.name ?? '');
-    final name = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(tag == null ? '添加标签' : '编辑标签'),
-        content: TextField(
-          controller: text,
-          autofocus: true,
-          maxLength: 8,
-          decoration: const InputDecoration(hintText: '标签名称'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, text.text.trim()),
-            child: const Text('保存'),
-          ),
-        ],
-      ),
+    await showCategoryEditor(
+      context,
+      outfits: true,
+      tag: tag,
+      parentId: parentId,
     );
-    text.dispose();
-    if (name == null) return;
-    if (name.isEmpty) {
-      if (tag != null) await _deleteTag(tag);
-      return;
-    }
-    try {
-      final existingTags = await ref.read(outfitTagsProvider.future);
-      await ref
-          .read(outfitTagsProvider.notifier)
-          .save(
-            WardrobeTag(
-              syncVersion: tag?.syncVersion ?? 0,
-              id: tag?.id ?? const Uuid().v4(),
-              name: name,
-              parentId: tag?.parentId ?? parentId,
-              sortOrder:
-                  tag?.sortOrder ??
-                  nextTagSortOrder(existingTags, parentId: parentId),
-            ),
-          );
-    } on TagValidationException catch (error) {
-      _showMessage(error.message);
-    } catch (error) {
-      _showMessage('标签保存失败：$error');
-    }
   }
 
   Future<void> _deleteTag(WardrobeTag tag) async {
@@ -678,97 +702,70 @@ class _DetailTagBar extends StatelessWidget {
     width: 104,
     height: 360,
     child: Container(
-      margin: const EdgeInsets.fromLTRB(10, 0, 0, 100),
+      margin: const EdgeInsets.fromLTRB(10, 4, 0, 0),
       padding: const EdgeInsets.symmetric(vertical: 8),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerLowest,
         borderRadius: BorderRadius.circular(16),
       ),
-      child: editing || tags.isNotEmpty
-          ? Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: _TagChip(
-                    label: '全部',
-                    selected: selectedId == null,
-                    vertical: true,
-                    onTap: () => onSelect(null),
-                  ),
-                ),
-                Expanded(
-                  child: ReorderableListView.builder(
-                    itemCount: tags.length,
-                    onReorderItem: onReorder,
-                    onReorderStart: (_) => onStartEditing(),
-                    buildDefaultDragHandles: false,
-                    proxyDecorator: (child, index, animation) => Material(
-                      color: Colors.transparent,
-                      elevation: 0,
-                      child: IgnorePointer(child: child),
-                    ),
-                    itemBuilder: (context, index) {
-                      final tag = tags[index];
-                      return ReorderableDelayedDragStartListener(
-                        key: ValueKey(tag.id),
-                        index: index,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 7,
-                            vertical: 3,
-                          ),
-                          child: _TagChip(
-                            label: tag.name,
-                            selected: selectedId == tag.id,
-                            vertical: true,
-                            editing: editing,
-                            onTap: () =>
-                                editing ? onEdit(tag) : onSelect(tag.id),
-                            onDelete: () => onDelete(tag),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-                IgnorePointer(
-                  ignoring: editing,
-                  child: Opacity(
-                    opacity: editing ? 0 : 1,
-                    child: IconButton(
-                      onPressed: onAdd,
-                      icon: const Icon(Icons.add, size: 20),
-                      tooltip: '添加细分标签',
-                    ),
-                  ),
-                ),
-              ],
-            )
-          : ListView(
-              children: [
-                _TagChip(
-                  label: '全部',
-                  selected: selectedId == null,
-                  vertical: true,
-                  onTap: () => onSelect(null),
-                ),
-                ...tags.map(
-                  (tag) => _TagChip(
-                    label: tag.name,
-                    selected: selectedId == tag.id,
-                    vertical: true,
-                    onTap: () => onSelect(tag.id),
-                    onLongPress: () => onStartEditingTag(tag),
-                    onDelete: () => onDelete(tag),
-                  ),
-                ),
-                IconButton(
-                  onPressed: onAdd,
-                  icon: const Icon(Icons.add, size: 20),
-                  tooltip: '添加细分标签',
-                ),
-              ],
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: _TagChip(
+              label: '全部',
+              selected: selectedId == null,
+              vertical: true,
+              onTap: () => onSelect(null),
             ),
+          ),
+          Expanded(
+            child: ReorderableListView.builder(
+              footer: IgnorePointer(
+                ignoring: editing,
+                child: Opacity(
+                  opacity: editing ? 0 : 1,
+                  child: IconButton(
+                    onPressed: onAdd,
+                    icon: const Icon(Icons.add, size: 20),
+                    tooltip: '添加细分标签',
+                  ),
+                ),
+              ),
+              itemCount: tags.length,
+              onReorderItem: onReorder,
+              onReorderStart: (_) => onStartEditing(),
+              buildDefaultDragHandles: false,
+              proxyDecorator: (child, index, animation) => Material(
+                color: Colors.transparent,
+                elevation: 0,
+                child: IgnorePointer(child: child),
+              ),
+              itemBuilder: (context, index) {
+                final tag = tags[index];
+                return ReorderableDelayedDragStartListener(
+                  key: ValueKey(tag.id),
+                  index: index,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 3,
+                    ),
+                    child: _TagChip(
+                      label: tag.name,
+                      selected: selectedId == tag.id,
+                      vertical: true,
+                      editing: editing,
+                      onTap: () => editing ? onEdit(tag) : onSelect(tag.id),
+                      onDelete: () => onDelete(tag),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
     ),
   );
 }
@@ -916,57 +913,6 @@ class _AddCategoryButton extends StatelessWidget {
     ),
     icon: const Icon(Icons.add, size: 16),
     label: const Text('添加分类'),
-  );
-}
-
-class _StylistStep extends StatelessWidget {
-  const _StylistStep({
-    required this.number,
-    required this.title,
-    required this.description,
-  });
-  final String number;
-  final String title;
-  final String description;
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 20),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(top: 2),
-          child: Text(
-            number,
-            style: const TextStyle(fontSize: 12, color: Color(0xFF9A8672)),
-          ),
-        ),
-        const SizedBox(width: 16),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                description,
-                style: const TextStyle(
-                  fontSize: 13,
-                  height: 1.6,
-                  color: Color(0xFF71675E),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    ),
   );
 }
 

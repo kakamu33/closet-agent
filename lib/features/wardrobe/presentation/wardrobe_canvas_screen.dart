@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../../../core/widgets/text_entry_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
@@ -123,29 +124,11 @@ class _WardrobeCanvasScreenState extends ConsumerState<WardrobeCanvasScreen> {
   }
 
   Future<void> _renameItem(WardrobeItem item) async {
-    final controller = TextEditingController(text: item.name);
-    final name = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('修改衣物名称'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          onSubmitted: (value) => Navigator.pop(context, value.trim()),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('保存'),
-          ),
-        ],
-      ),
+    final name = await showTextEntryDialog(
+      context,
+      title: '修改衣物名称',
+      initial: item.name,
     );
-    controller.dispose();
     if (!mounted || name == null || name.isEmpty) return;
     await ref
         .read(wardrobeItemsProvider.notifier)
@@ -199,29 +182,11 @@ class _WardrobeCanvasScreenState extends ConsumerState<WardrobeCanvasScreen> {
       _regionEnd = null;
     });
     if (rect == null || rect.width < 60 || rect.height < 60) return;
-    final controller = TextEditingController();
-    final label = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('命名收纳区域'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: '例如：吊带箱子'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('保存'),
-          ),
-        ],
-      ),
+    final label = await showTextEntryDialog(
+      context,
+      title: '命名收纳区域',
+      hint: '例如：吊带箱子',
     );
-    controller.dispose();
     if (!mounted || label == null || label.isEmpty) return;
     await ref
         .read(wardrobeCanvasRegionsProvider.notifier)
